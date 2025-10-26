@@ -5,7 +5,6 @@ import crm.repository.UserRepository;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
-import org.springframework.security.core.userdetails.User as SpringUser;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.stereotype.Service;
 
@@ -14,13 +13,13 @@ import java.util.List;
 @Service
 public class UserService implements UserDetailsService {
 
-    private final UserRepository userRepository;
+    public final UserRepository userRepository;
 
     public UserService(UserRepository userRepository) {
         this.userRepository = userRepository;
     }
 
-    public User save(User user) {
+    public User save (User user) {
         return userRepository.save(user);
     }
 
@@ -34,13 +33,18 @@ public class UserService implements UserDetailsService {
 
     @Override
     public UserDetails loadUserByUsername(String username) throws UsernameNotFoundException {
-        var user = userRepository.findById(username)
+        User user = userRepository.findById(username)
                 .or(() -> userRepository.findByEmail(username))
                 .orElseThrow(() -> new UsernameNotFoundException("User not found: " + username));
 
-        var authorities = List.of(new SimpleGrantedAuthority("ROLE_" + (user.getRole() == null ? "USER" : user.getRole().toUpperCase())));
+        var authorities = List.of(new SimpleGrantedAuthority("ROLE_" +
+                (user.getRole() == null ? "USER" : user.getRole().toUpperCase())));
 
-        return new SpringUser(user.getId(), user.getPassword(), authorities);
+        // Use fully qualified Spring Security User to avoid name collision with crm.entity.User
+        return new org.springframework.security.core.userdetails.User(
+                user.getId(),
+                user.getPassword(),
+                authorities
+        );
     }
 }
-
