@@ -3,6 +3,7 @@ package crm.service;
 
 import crm.model.AIRequest;
 import crm.model.AIResponse;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
@@ -22,7 +23,7 @@ public class AIService {
     @Value("${gptmaker.token}")
     private String gptToken;
 
-    public AIService(RestTemplate restTemplate) {
+    public AIService(@Qualifier("iaRestTemplate") RestTemplate restTemplate) {
         this.restTemplate = restTemplate;
     }
 

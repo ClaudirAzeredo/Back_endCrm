@@ -1,0 +1,24 @@
+Branch: unicrm-backend
+
+Instructions to apply the patch:
+
+1) Save the content of this patch into a file named changes.patch (or use the provided file).
+
+2) From the repository root:
+
+   git fetch origin
+   git checkout -b unicrm-backend origin/master
+
+   # Apply the unified diff:
+   git apply --index changes.patch
+
+   # Review changes, then commit and push:
+   git commit -m "feat: add auth (JWT + refresh tokens), user & company entities, security and basic controllers"
+   git push origin unicrm-backend
+
+3) After pushing, open a Pull Request from unicrm-backend -> master in GitHub and run CI.
+
+Notes:
+- You need to update the JWT secret and DB credentials before running.
+- If git apply reports failures, you can create the files manually copying from the patch contents included.
+

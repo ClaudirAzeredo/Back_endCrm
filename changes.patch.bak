@@ -1,0 +1,789 @@
+﻿*** Begin Patch
+*** Update File: pom.xml
+@@
+-    <modelVersion>4.0.0</modelVersion>
+-    <groupId>crm</groupId>
+-    <artifactId>crm-backend</artifactId>
+-    <version>1.0-SNAPSHOT</version>
+-    <packaging>jar</packaging>
+-    <name>crm-backend</name>
+-    <description>CRM Backend</description>
+-
+-    <properties>
+-        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+-        <maven.compiler.source>17</maven.compiler.source>
+-        <maven.compiler.target>17</maven.compiler.target>
+-    </properties>
+-
+-    <dependencies>
+-        <!-- existing dependencies (if any) -->
+-    </dependencies>
+-
+-    <build>
+-        <plugins>
+-            <plugin>
+-                <groupId>org.apache.maven.plugins</groupId>
+-                <artifactId>maven-compiler-plugin</artifactId>
+-                <version>3.8.1</version>
+-                <configuration>
+-                    <source>17</source>
+-                    <target>17</target>
+-                </configuration>
+-            </plugin>
+-        </plugins>
+-    </build>
++    <modelVersion>4.0.0</modelVersion>
++    <groupId>crm</groupId>
++    <artifactId>crm-backend</artifactId>
++    <version>1.0-SNAPSHOT</version>
++    <packaging>jar</packaging>
++    <name>crm-backend</name>
++    <description>CRM Backend</description>
++
++    <properties>
++        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
++        <maven.compiler.source>17</maven.compiler.source>
++        <maven.compiler.target>17</maven.compiler.target>
++        <spring.boot.version>3.1.6</spring.boot.version>
++        <jjwt.version>0.11.5</jjwt.version>
++    </properties>
++
++    <dependencyManagement>
++        <dependencies>
++            <dependency>
++                <groupId>org.springframework.boot</groupId>
++                <artifactId>spring-boot-dependencies</artifactId>
++                <version>${spring.boot.version}</version>
++                <type>pom</type>
++                <scope>import</scope>
++            </dependency>
++        </dependencies>
++    </dependencyManagement>
++
++    <dependencies>
++        <!-- Spring Boot starters -->
++        <dependency>
++            <groupId>org.springframework.boot</groupId>
++            <artifactId>spring-boot-starter-web</artifactId>
++        </dependency>
++        <dependency>
++            <groupId>org.springframework.boot</groupId>
++            <artifactId>spring-boot-starter-data-jpa</artifactId>
++        </dependency>
++        <dependency>
++            <groupId>org.springframework.boot</groupId>
++            <artifactId>spring-boot-starter-security</artifactId>
++        </dependency>
++        <dependency>
++            <groupId>org.springframework.boot</groupId>
++            <artifactId>spring-boot-starter-validation</artifactId>
++        </dependency>
++
++        <!-- PostgreSQL driver -->
++        <dependency>
++            <groupId>org.postgresql</groupId>
++            <artifactId>postgresql</artifactId>
++        </dependency>
++
++        <!-- Lombok -->
++        <dependency>
++            <groupId>org.projectlombok</groupId>
++            <artifactId>lombok</artifactId>
++            <optional>true</optional>
++        </dependency>
++
++        <!-- JJWT -->
++        <dependency>
++            <groupId>io.jsonwebtoken</groupId>
++            <artifactId>jjwt-api</artifactId>
++            <version>${jjwt.version}</version>
++        </dependency>
++        <dependency>
++            <groupId>io.jsonwebtoken</groupId>
++            <artifactId>jjwt-impl</artifactId>
++            <version>${jjwt.version}</version>
++            <scope>runtime</scope>
++        </dependency>
++        <dependency>
++            <groupId>io.jsonwebtoken</groupId>
++            <artifactId>jjwt-jackson</artifactId>
++            <version>${jjwt.version}</version>
++            <scope>runtime</scope>
++        </dependency>
++
++        <!-- OpenAPI / Swagger -->
++        <dependency>
++            <groupId>org.springdoc</groupId>
++            <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
++            <version>2.1.0</version>
++        </dependency>
++
++        <!-- Test -->
++        <dependency>
++            <groupId>org.springframework.boot</groupId>
++            <artifactId>spring-boot-starter-test</artifactId>
++            <scope>test</scope>
++        </dependency>
++    </dependencies>
++
++    <build>
++        <plugins>
++            <plugin>
++                <groupId>org.springframework.boot</groupId>
++                <artifactId>spring-boot-maven-plugin</artifactId>
++            </plugin>
++            <plugin>
++                <groupId>org.apache.maven.plugins</groupId>
++                <artifactId>maven-compiler-plugin</artifactId>
++                <version>3.10.1</version>
++                <configuration>
++                    <source>17</source>
++                    <target>17</target>
++                    <annotationProcessorPaths>
++                        <path>
++                            <groupId>org.projectlombok</groupId>
++                            <artifactId>lombok</artifactId>
++                            <version>1.18.28</version>
++                        </path>
++                    </annotationProcessorPaths>
++                </configuration>
++            </plugin>
++        </plugins>
++    </build>
+*** End Patch
+*** Begin Patch
+*** Add File: src/main/java/crm/security/JwtTokenProvider.java
++package crm.security;
++
++import io.jsonwebtoken.*;
++import io.jsonwebtoken.security.Keys;
++import org.springframework.beans.factory.annotation.Value;
++import org.springframework.stereotype.Component;
++
++import java.security.Key;
++import java.util.Date;
++
++@Component
++public class JwtTokenProvider {
++
++    private final Key key;
++    private final long validityInMilliseconds;
++
++    public JwtTokenProvider(@Value("${app.jwt.secret}") String secret,
++                            @Value("${app.jwt.expiration-ms}") long validityInMilliseconds) {
++        this.key = Keys.hmacShaKeyFor(secret.getBytes());
++        this.validityInMilliseconds = validityInMilliseconds;
++    }
++
++    public String createToken(String userId, String email, String role, String companyId) {
++        Claims claims = Jwts.claims().setSubject(userId);
++        claims.put("email", email);
++        claims.put("role", role);
++        claims.put("companyId", companyId);
++
++        Date now = new Date();
++        Date validity = new Date(now.getTime() + validityInMilliseconds);
++
++        return Jwts.builder()
++                .setClaims(claims)
++                .setIssuedAt(now)
++                .setExpiration(validity)
++                .signWith(key, SignatureAlgorithm.HS256)
++                .compact();
++    }
++
++    public boolean validateToken(String token) {
++        try {
++            Jwts.parserBuilder().setSigningKey(key).build().parseClaimsJws(token);
++            return true;
++        } catch (JwtException | IllegalArgumentException e) {
++            return false;
++        }
++    }
++
++    public Claims getClaims(String token) {
++        return Jwts.parserBuilder().setSigningKey(key).build().parseClaimsJws(token).getBody();
++    }
++}
++
+*** End Patch
+*** Begin Patch
+*** Add File: src/main/java/crm/config/SecurityConfig.java
++package crm.config;
++
++import crm.security.JwtAuthenticationFilter;
++import org.springframework.context.annotation.Bean;
++import org.springframework.context.annotation.Configuration;
++import org.springframework.security.authentication.AuthenticationManager;
++import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
++import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
++import org.springframework.security.config.http.SessionCreationPolicy;
++import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
++import org.springframework.security.crypto.password.PasswordEncoder;
++import org.springframework.security.web.SecurityFilterChain;
++import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
++import org.springframework.security.config.annotation.web.builders.HttpSecurity;
++
++@Configuration
++@EnableMethodSecurity
++public class SecurityConfig {
++
++    private final JwtAuthenticationFilter jwtAuthenticationFilter;
++
++    public SecurityConfig(JwtAuthenticationFilter jwtAuthenticationFilter) {
++        this.jwtAuthenticationFilter = jwtAuthenticationFilter;
++    }
++
++    @Bean
++    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
++        http
++                .csrf().disable()
++                .sessionManagement().sessionCreationPolicy(SessionCreationPolicy.STATELESS)
++                .and()
++                .authorizeHttpRequests(auth -> auth
++                        .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
++                        .requestMatchers("/auth/**", "/landing-pages/**").permitAll()
++                        .anyRequest().authenticated()
++                );
++
++        http.addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
++        return http.build();
++    }
++
++    @Bean
++    public PasswordEncoder passwordEncoder() {
++        return new BCryptPasswordEncoder();
++    }
++
++    @Bean
++    public AuthenticationManager authenticationManager(AuthenticationConfiguration authConfig) throws Exception {
++        return authConfig.getAuthenticationManager();
++    }
++}
++
+*** End Patch
+*** Begin Patch
+*** Add File: src/main/java/crm/security/JwtAuthenticationFilter.java
++package crm.security;
++
++import io.jsonwebtoken.Claims;
++import jakarta.servlet.FilterChain;
++import jakarta.servlet.ServletException;
++import jakarta.servlet.http.HttpServletRequest;
++import jakarta.servlet.http.HttpServletResponse;
++import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
++import org.springframework.security.core.authority.SimpleGrantedAuthority;
++import org.springframework.security.core.context.SecurityContextHolder;
++import org.springframework.security.core.userdetails.UserDetails;
++import org.springframework.security.core.userdetails.UserDetailsService;
++import org.springframework.stereotype.Component;
++import org.springframework.web.filter.OncePerRequestFilter;
++
++import java.io.IOException;
++import java.util.List;
++import java.util.stream.Collectors;
++
++@Component
++public class JwtAuthenticationFilter extends OncePerRequestFilter {
++
++    private final JwtTokenProvider jwtTokenProvider;
++    private final UserDetailsService userDetailsService;
++
++    public JwtAuthenticationFilter(JwtTokenProvider jwtTokenProvider, UserDetailsService userDetailsService) {
++        this.jwtTokenProvider = jwtTokenProvider;
++        this.userDetailsService = userDetailsService;
++    }
++
++    @Override
++    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
++            throws ServletException, IOException {
++        String header = request.getHeader("Authorization");
++        if (header != null && header.startsWith("Bearer ")) {
++            String token = header.substring(7);
++            if (jwtTokenProvider.validateToken(token)) {
++                Claims claims = jwtTokenProvider.getClaims(token);
++                String userId = claims.getSubject();
++                String role = claims.get("role", String.class);
++
++                UserDetails userDetails = userDetailsService.loadUserByUsername(userId);
++
++                var authorities = List.of(new SimpleGrantedAuthority("ROLE_" + (role == null ? "USER" : role.toUpperCase())));
++
++                var auth = new UsernamePasswordAuthenticationToken(userDetails, null, authorities);
++                SecurityContextHolder.getContext().setAuthentication(auth);
++            }
++        }
++        filterChain.doFilter(request, response);
++    }
++}
++
+*** End Patch
+*** Begin Patch
+*** Add File: src/main/java/crm/entity/Company.java
++package crm.entity;
++
++import jakarta.persistence.*;
++import lombok.*;
++
++import java.time.Instant;
++import java.util.UUID;
++
++@Entity
++@Table(name = "companies")
++@Getter
++@Setter
++@NoArgsConstructor
++@AllArgsConstructor
++@Builder
++public class Company {
++    @Id
++    @Column(nullable = false, updatable = false)
++    private String id = UUID.randomUUID().toString();
++
++    @Column(nullable = false)
++    private String name;
++
++    private String email;
++
++    private String status;
++
++    private String plan;
++
++    private Instant createdAt = Instant.now();
++}
++
+*** End Patch
+*** Begin Patch
+*** Add File: src/main/java/crm/entity/User.java
++package crm.entity;
++
++import jakarta.persistence.*;
++import lombok.*;
++
++import java.time.Instant;
++import java.util.UUID;
++
++@Entity
++@Table(name = "users")
++@Getter
++@Setter
++@NoArgsConstructor
++@AllArgsConstructor
++@Builder
++public class User {
++    @Id
++    @Column(nullable = false, updatable = false)
++    private String id = UUID.randomUUID().toString();
++
++    @Column(nullable = false)
++    private String name;
++
++    @Column(nullable = false, unique = true)
++    private String email;
++
++    @Column(nullable = false)
++    private String password;
++
++    private String phone;
++
++    private String role; // owner, admin, user, superadmin
++
++    @Column(nullable = false)
++    private String companyId;
++
++    private Instant createdAt = Instant.now();
++    private Instant updatedAt;
++}
++
+*** End Patch
+*** Begin Patch
+*** Add File: src/main/java/crm/entity/RefreshToken.java
++package crm.entity;
++
++import jakarta.persistence.*;
++import lombok.*;
++
++import java.time.Instant;
++import java.util.UUID;
++
++@Entity
++@Table(name = "refresh_tokens")
++@Getter
++@Setter
++@NoArgsConstructor
++@AllArgsConstructor
++@Builder
++public class RefreshToken {
++    @Id
++    @Column(nullable = false, updatable = false)
++    private String id = UUID.randomUUID().toString();
++
++    @Column(nullable = false)
++    private String token;
++
++    @Column(nullable = false)
++    private String userId;
++
++    private Instant expiryDate;
++}
++
+*** End Patch
+*** Begin Patch
+*** Add File: src/main/java/crm/repository/UserRepository.java
++package crm.repository;
++
++import crm.entity.User;
++import org.springframework.data.jpa.repository.JpaRepository;
++import org.springframework.stereotype.Repository;
++
++import java.util.Optional;
++
++@Repository
++public interface UserRepository extends JpaRepository<User, String> {
++    Optional<User> findByEmail(String email);
++}
++
+*** End Patch
+*** Begin Patch
+*** Add File: src/main/java/crm/repository/CompanyRepository.java
++package crm.repository;
++
++import crm.entity.Company;
++import org.springframework.data.jpa.repository.JpaRepository;
++import org.springframework.stereotype.Repository;
++
++@Repository
++public interface CompanyRepository extends JpaRepository<Company, String> {
++}
++
+*** End Patch
+*** Begin Patch
+*** Add File: src/main/java/crm/repository/RefreshTokenRepository.java
++package crm.repository;
++
++import crm.entity.RefreshToken;
++import org.springframework.data.jpa.repository.JpaRepository;
++import org.springframework.stereotype.Repository;
++
++import java.util.Optional;
++
++@Repository
++public interface RefreshTokenRepository extends JpaRepository<RefreshToken, String> {
++    Optional<RefreshToken> findByToken(String token);
++    void deleteByUserId(String userId);
++}
++
+*** End Patch
+*** Begin Patch
+*** Add File: src/main/java/crm/service/UserService.java
++package crm.service;
++
++import crm.entity.User;
++import crm.repository.UserRepository;
++import org.springframework.security.core.userdetails.UserDetails;
++import org.springframework.security.core.userdetails.UserDetailsService;
++import org.springframework.security.core.userdetails.UsernameNotFoundException;
++import org.springframework.security.core.userdetails.User as SpringUser;
++import org.springframework.security.core.authority.SimpleGrantedAuthority;
++import org.springframework.stereotype.Service;
++
++import java.util.List;
++
++@Service
++public class UserService implements UserDetailsService {
++
++    private final UserRepository userRepository;
++
++    public UserService(UserRepository userRepository) {
++        this.userRepository = userRepository;
++    }
++
++    public User save(User user) {
++        return userRepository.save(user);
++    }
++
++    public User findById(String id) {
++        return userRepository.findById(id).orElse(null);
++    }
++
++    public User findByEmail(String email) {
++        return userRepository.findByEmail(email).orElse(null);
++    }
++
++    @Override
++    public UserDetails loadUserByUsername(String username) throws UsernameNotFoundException {
++        var user = userRepository.findById(username)
++                .or(() -> userRepository.findByEmail(username))
++                .orElseThrow(() -> new UsernameNotFoundException("User not found: " + username));
++
++        var authorities = List.of(new SimpleGrantedAuthority("ROLE_" + (user.getRole() == null ? "USER" : user.getRole().toUpperCase())));
++
++        return new SpringUser(user.getId(), user.getPassword(), authorities);
++    }
++}
++
+*** End Patch
+*** Begin Patch
+*** Add File: src/main/java/crm/service/AuthService.java
++package crm.service;
++
++import crm.entity.Company;
++import crm.entity.RefreshToken;
++import crm.entity.User;
++import crm.repository.CompanyRepository;
++import crm.repository.RefreshTokenRepository;
++import crm.repository.UserRepository;
++import crm.security.JwtTokenProvider;
++import org.springframework.beans.factory.annotation.Value;
++import org.springframework.security.authentication.AuthenticationManager;
++import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
++import org.springframework.security.crypto.password.PasswordEncoder;
++import org.springframework.stereotype.Service;
++
++import java.time.Instant;
++import java.util.UUID;
++
++@Service
++public class AuthService {
++
++    private final UserRepository userRepository;
++    private final CompanyRepository companyRepository;
++    private final RefreshTokenRepository refreshTokenRepository;
++    private final PasswordEncoder passwordEncoder;
++    private final JwtTokenProvider jwtTokenProvider;
++    private final AuthenticationManager authenticationManager;
++    private final long refreshTokenTtlMs;
++
++    public AuthService(UserRepository userRepository,
++                       CompanyRepository companyRepository,
++                       RefreshTokenRepository refreshTokenRepository,
++                       PasswordEncoder passwordEncoder,
++                       JwtTokenProvider jwtTokenProvider,
++                       AuthenticationManager authenticationManager,
++                       @Value("${app.refresh-token.expiration-ms}") long refreshTokenTtlMs) {
++        this.userRepository = userRepository;
++        this.companyRepository = companyRepository;
++        this.refreshTokenRepository = refreshTokenRepository;
++        this.passwordEncoder = passwordEncoder;
++        this.jwtTokenProvider = jwtTokenProvider;
++        this.authenticationManager = authenticationManager;
++        this.refreshTokenTtlMs = refreshTokenTtlMs;
++    }
++
++    public User register(String name, String email, String rawPassword, String phone, String companyName) {
++        Company company = Company.builder().name(companyName).status("active").build();
++        company = companyRepository.save(company);
++
++        User user = User.builder()
++                .name(name)
++                .email(email)
++                .password(passwordEncoder.encode(rawPassword))
++                .phone(phone)
++                .role("owner")
++                .companyId(company.getId())
++                .build();
++
++        return userRepository.save(user);
++    }
++
++    public String login(String email, String password) {
++        var userOptional = userRepository.findByEmail(email);
++        if (userOptional.isEmpty()) {
++            throw new RuntimeException("Invalid credentials");
++        }
++        var user = userOptional.get();
++
++        authenticationManager.authenticate(new UsernamePasswordAuthenticationToken(user.getId(), password));
++
++        return jwtTokenProvider.createToken(user.getId(), user.getEmail(), user.getRole(), user.getCompanyId());
++    }
++
++    public RefreshToken createRefreshToken(String userId) {
++        RefreshToken rt = RefreshToken.builder()
++                .token(UUID.randomUUID().toString())
++                .userId(userId)
++                .expiryDate(Instant.now().plusMillis(refreshTokenTtlMs))
++                .build();
++
++        return refreshTokenRepository.save(rt);
++    }
++
++    public void logout(String userId) {
++        refreshTokenRepository.deleteByUserId(userId);
++    }
++}
++
+*** End Patch
+*** Begin Patch
+*** Add File: src/main/java/crm/controller/AuthController.java
++package crm.controller;
++
++import crm.entity.RefreshToken;
++import crm.entity.User;
++import crm.service.AuthService;
++import crm.service.UserService;
++import org.springframework.http.ResponseEntity;
++import org.springframework.security.core.Authentication;
++import org.springframework.web.bind.annotation.*;
++
++import java.util.Map;
++
++@RestController
++@RequestMapping("/auth")
++public class AuthController {
++
++    private final AuthService authService;
++    private final UserService userService;
++
++    public AuthController(AuthService authService, UserService userService) {
++        this.authService = authService;
++        this.userService = userService;
++    }
++
++    @PostMapping("/register")
++    public ResponseEntity<?> register(@RequestBody Map<String, String> body) {
++        var user = authService.register(
++                body.get("name"),
++                body.get("email"),
++                body.get("password"),
++                body.get("phone"),
++                body.get("company")
++        );
++        var token = authService.login(user.getEmail(), body.get("password"));
++        var refreshToken = authService.createRefreshToken(user.getId());
++
++        return ResponseEntity.status(201).body(Map.of(
++                "success", true,
++                "user", user,
++                "token", token,
++                "refreshToken", refreshToken.getToken()
++        ));
++    }
++
++    @PostMapping("/login")
++    public ResponseEntity<?> login(@RequestBody Map<String, String> body) {
++        String token = authService.login(body.get("email"), body.get("password"));
++        var user = userService.findByEmail(body.get("email"));
++        var refreshToken = authService.createRefreshToken(user.getId());
++        return ResponseEntity.ok(Map.of(
++                "success", true,
++                "user", user,
++                "token", token,
++                "refreshToken", refreshToken.getToken()
++        ));
++    }
++
++    @PostMapping("/logout")
++    public ResponseEntity<?> logout(Authentication authentication) {
++        if (authentication == null) {
++            return ResponseEntity.status(401).body(Map.of("success", false, "message", "Not authenticated"));
++        }
++        String userId = authentication.getName();
++        authService.logout(userId);
++        return ResponseEntity.ok(Map.of("success", true, "message", "Logout realizado com sucesso"));
++    }
++
++    @GetMapping("/me")
++    public ResponseEntity<?> me(Authentication authentication) {
++        if (authentication == null) {
++            return ResponseEntity.status(401).build();
++        }
++        String userId = authentication.getName();
++        var user = userService.findById(userId);
++        return ResponseEntity.ok(user);
++    }
++}
++
+*** End Patch
+*** Begin Patch
+*** Add File: src/main/java/crm/controller/UserController.java
++package crm.controller;
++
++import crm.entity.User;
++import crm.service.UserService;
++import org.springframework.http.ResponseEntity;
++import org.springframework.web.bind.annotation.*;
++
++import java.util.List;
++
++@RestController
++@RequestMapping("/users")
++public class UserController {
++
++    private final UserService userService;
++
++    public UserController(UserService userService) {
++        this.userService = userService;
++    }
++
++    @GetMapping
++    public ResponseEntity<List<User>> listAll() {
++        return ResponseEntity.ok(userService.userRepository.findAll());
++    }
++
++    @GetMapping("/{id}")
++    public ResponseEntity<User> get(@PathVariable String id) {
++        var user = userService.findById(id);
++        if (user == null) return ResponseEntity.notFound().build();
++        return ResponseEntity.ok(user);
++    }
++}
++
+*** End Patch
+*** Begin Patch
+*** Update File: src/main/resources/application.properties
+@@
+-server.port=8080
+-
+-some.existing.property=foo
++server.port=8080
++
++# Database - override in env for production
++spring.datasource.url=jdbc:postgresql://localhost:5432/crmuni
++spring.datasource.username=postgres
++spring.datasource.password=password
++spring.datasource.initialization-mode=never
++
++spring.jpa.hibernate.ddl-auto=update
++spring.jpa.properties.hibernate.format_sql=true
++spring.jpa.show-sql=true
++
++# JWT config (use a secure 256+ length secret in production via env vars)
++app.jwt.secret=ReplaceThisWithASecureRandomVeryLongSecretKeyForHS256_ChangeInProd
++app.jwt.expiration-ms=3600000
++
++# Refresh token TTL
++app.refresh-token.expiration-ms=2592000000
++
++# Springdoc OpenAPI
++springdoc.api-docs.path=/v3/api-docs
++springdoc.swagger-ui.path=/swagger-ui.html
++
+*** End Patch
+*** Begin Patch
+*** Add File: apply-instructions.txt
++Branch: unicrm-backend
++
++Instructions to apply the patch:
++
++1) Save the content of this patch into a file named changes.patch (or use the provided file).
++
++2) From the repository root:
++
++   git fetch origin
++   git checkout -b unicrm-backend origin/master
++
++   # Apply the unified diff:
++   git apply --index changes.patch
++
++   # Review changes, then commit and push:
++   git commit -m "feat: add auth (JWT + refresh tokens), user & company entities, security and basic controllers"
++   git push origin unicrm-backend
++
++3) After pushing, open a Pull Request from unicrm-backend -> master in GitHub and run CI.
++
++Notes:
++- You need to update the JWT secret and DB credentials before running.
++- If git apply reports failures, you can create the files manually copying from the patch contents included.
++
+*** End Patch
