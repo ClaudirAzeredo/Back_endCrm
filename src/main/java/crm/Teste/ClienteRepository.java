@@ -1,0 +1,7 @@
+package crm.Teste;
+
+import crm.Teste.Cliente;
+import org.springframework.data.jpa.repository.JpaRepository;
+
+public interface ClienteRepository extends JpaRepository<Cliente, Long> {
+}
