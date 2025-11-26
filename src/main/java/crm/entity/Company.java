@@ -14,8 +14,10 @@ import java.util.UUID;
 @AllArgsConstructor
 @Builder
 public class Company {
+
     @Id
     @Column(nullable = false, updatable = false)
+    @Builder.Default
     private String id = UUID.randomUUID().toString();
 
     @Column(nullable = false)
@@ -27,6 +29,16 @@ public class Company {
 
     private String plan;
 
+    @Builder.Default
     private Instant createdAt = Instant.now();
-}
 
+    @PrePersist
+    public void ensureDefaults() {
+        if (id == null || id.isBlank()) {
+            id = UUID.randomUUID().toString();
+        }
+        if (createdAt == null) {
+            createdAt = Instant.now();
+        }
+    }
+}

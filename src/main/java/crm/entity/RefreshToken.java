@@ -4,26 +4,42 @@ import jakarta.persistence.*;
 import lombok.*;
 
 import java.time.Instant;
-import java.util.UUID;
 
 @Entity
-@Table(name = "refresh_tokens")
+@Table(
+        name = "refresh_tokens",
+        uniqueConstraints = {
+                @UniqueConstraint(name = "uq_refresh_tokens_user", columnNames = {"user_id"})
+        }
+)
 @Getter
 @Setter
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
 public class RefreshToken {
+
+    // Código público sequencial (1,2,3,...)
     @Id
-    @Column(nullable = false, updatable = false)
-    private String id = UUID.randomUUID().toString();
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
 
-    @Column(nullable = false)
-    private String token;
+    // Hash do segredo (nunca guarde o segredo puro)
+    @Column(name = "secret_hash", nullable = false, length = 120)
+    private String secretHash;
 
-    @Column(nullable = false)
+    // user_id permanece String porque User.getId() é String (UUID)
+    @Column(name = "user_id", nullable = false, unique = true, length = 64)
     private String userId;
 
-    private Instant expiryDate;
-}
+    @Builder.Default
+    @Column(name = "created_at", nullable = false, updatable = false)
+    private Instant createdAt = Instant.now();
 
+    @Builder.Default
+    @Column(name = "revoked", nullable = false)
+    private boolean revoked = false;
+
+    @Column(name = "revoked_at")
+    private Instant revokedAt;
+}

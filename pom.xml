@@ -21,6 +21,7 @@
         <java.version>21</java.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+        <spring-boot.run.jvmArguments>-Dfile.encoding=UTF-8</spring-boot.run.jvmArguments>
 
         <!-- versions -->
         <jjwt.version>0.11.5</jjwt.version>
@@ -66,6 +67,13 @@
             <scope>runtime</scope>
         </dependency>
 
+        <!-- H2 database for dev profile -->
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
         <!-- JJWT -->
         <dependency>
             <groupId>io.jsonwebtoken</groupId>
@@ -106,6 +114,11 @@
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-test</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
@@ -132,8 +145,8 @@
                 <artifactId>maven-compiler-plugin</artifactId>
                 <version>3.11.0</version>
                 <configuration>
-                    <source>${java.version}</source>
-                    <target>${java.version}</target>
+                    <source>21</source>
+                    <target>21</target>
                     <release>${java.version}</release>
                     <encoding>UTF-8</encoding>
                     <annotationProcessorPaths>
@@ -143,6 +156,7 @@
                             <version>${lombok.version}</version>
                         </path>
                     </annotationProcessorPaths>
+                    <!-- compilerArgs example: -enable-preview -->
                 </configuration>
             </plugin>
         </plugins>

@@ -6,7 +6,7 @@ import crm.service.WhatsappService;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
-@RequestMapping("/whatsapp")
+@RequestMapping({"/whatsapp", "/api/whatsapp"})
 public class WhatsappController {
 
     private final WhatsappService whatsappService;

@@ -33,16 +33,16 @@ public class UserService implements UserDetailsService {
 
     @Override
     public UserDetails loadUserByUsername(String username) throws UsernameNotFoundException {
-        User user = userRepository.findById(username)
-                .or(() -> userRepository.findByEmail(username))
+        User user = userRepository.findByEmail(username)
+                .or(() -> userRepository.findById(username))
                 .orElseThrow(() -> new UsernameNotFoundException("User not found: " + username));
 
         var authorities = List.of(new SimpleGrantedAuthority("ROLE_" +
                 (user.getRole() == null ? "USER" : user.getRole().toUpperCase())));
 
-        // Use fully qualified Spring Security User to avoid name collision with crm.entity.User
+        // Use email as username so Authentication.getName() is the email (matches controller logic)
         return new org.springframework.security.core.userdetails.User(
-                user.getId(),
+                user.getEmail(),
                 user.getPassword(),
                 authorities
         );
