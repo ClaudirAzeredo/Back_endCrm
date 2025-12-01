@@ -4,6 +4,7 @@ import jakarta.persistence.*;
 import lombok.*;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 @Entity
@@ -14,8 +15,10 @@ import java.util.UUID;
 @AllArgsConstructor
 @Builder
 public class User {
+
     @Id
     @Column(nullable = false, updatable = false)
+    @Builder.Default
     private String id = UUID.randomUUID().toString();
 
     @Column(nullable = false)
@@ -29,12 +32,29 @@ public class User {
 
     private String phone;
 
-    private String role; // owner, admin, user, superadmin
+    private String role;
 
-    @Column(nullable = false)
+    // companyId como String para combinar com Company.id (ajuste se usar Long/UUID)
     private String companyId;
 
-    private Instant createdAt = Instant.now();
-    private Instant updatedAt;
-}
+    // Referência ao cargo do usuário (JobTitle.id)
+    private String jobTitleId;
 
+    @ElementCollection(fetch = FetchType.EAGER)
+    @CollectionTable(name = "user_modules", joinColumns = @JoinColumn(name = "user_id"))
+    @Column(name = "module_id")
+    private List<String> modules;
+
+    @Builder.Default
+    private Instant createdAt = Instant.now();
+
+    @PrePersist
+    public void ensureDefaults() {
+        if (id == null || id.isBlank()) {
+            id = UUID.randomUUID().toString();
+        }
+        if (createdAt == null) {
+            createdAt = Instant.now();
+        }
+    }
+}
