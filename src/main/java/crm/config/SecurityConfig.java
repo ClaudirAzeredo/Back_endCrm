@@ -20,6 +20,14 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import java.util.List;
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.web.filter.OncePerRequestFilter;
+import org.springframework.web.util.ContentCachingRequestWrapper;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 
 @Configuration
 @EnableMethodSecurity
@@ -51,7 +59,12 @@ public class SecurityConfig {
 
                         // WhatsApp PUBLIC endpoints
                         .requestMatchers("/api/whatsapp/qr").permitAll()
+                        .requestMatchers("/api/whatsapp/qr/image").permitAll()
+                        .requestMatchers("/whatsapp/qr").permitAll()
+                        .requestMatchers("/whatsapp/qr/image").permitAll()
                         .requestMatchers("/api/whatsapp/status").permitAll()
+                        .requestMatchers("/api/whatsapp/stream").permitAll()
+                        .requestMatchers("/api/whatsapp/webhook").permitAll()
                         .requestMatchers("/whatsapp/webhook").permitAll()
 
                         // Other WhatsApp endpoints require auth
@@ -62,6 +75,29 @@ public class SecurityConfig {
 
         http.addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
         return http.build();
+    }
+
+    @Bean
+    public OncePerRequestFilter webhookLoggingFilter() {
+        return new OncePerRequestFilter() {
+            @Override
+            protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain) throws ServletException, IOException {
+                String path = request.getRequestURI();
+                if (path != null && path.contains("/whatsapp/webhook")) {
+                    String ct = request.getContentType();
+                    org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger("WEBHOOK-FILTER");
+                    logger.info("[WEBHOOK FILTER] path={} contentType={}", path, ct);
+                    ContentCachingRequestWrapper wrapped = new ContentCachingRequestWrapper(request);
+                    filterChain.doFilter(wrapped, response);
+                    byte[] buf = wrapped.getContentAsByteArray();
+                    String body = (buf != null && buf.length > 0) ? new String(buf, StandardCharsets.UTF_8) : "";
+                    String preview = body;
+                    logger.info("[WEBHOOK FILTER] raw preview: {}", preview.substring(0, Math.min(1000, preview.length())));
+                    return;
+                }
+                filterChain.doFilter(request, response);
+            }
+        };
     }
 
     @Bean

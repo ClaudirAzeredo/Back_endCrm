@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
 import { LogOut, User } from "lucide-react"
@@ -38,6 +38,21 @@ export default function Home() {
     return "dashboard"
   }
 
+  useEffect(() => {
+    const handler = (ev: ErrorEvent) => {
+      const msg = ev.message || ""
+      if (msg.includes("removeChild")) {
+        try {
+          console.error("[DOM-ERROR]", msg, ev.error && ev.error.stack ? ev.error.stack : null)
+        } catch {}
+      }
+    }
+    window.addEventListener("error", handler)
+    return () => {
+      window.removeEventListener("error", handler)
+    }
+  }, [])
+  
   const handleLogout = async () => {
     await logout()
     setShowAdminPanel(false)

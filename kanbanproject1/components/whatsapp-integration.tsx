@@ -23,6 +23,8 @@ import {
 } from "lucide-react"
 import { loadFromStorage, saveToStorage } from "@/lib/storage"
 import { ZApiProvider, type ZApiConfig } from "@/lib/whatsapp-api"
+import { apiClient, API_BASE_URL } from "@/lib/api-client"
+import { useQr } from "@/hooks/use-qr"
 
 type WhatsAppMessage = {
   id: string
@@ -55,10 +57,24 @@ export default function WhatsAppIntegration({ open, onClose }: WhatsAppIntegrati
   const [selectedConversation, setSelectedConversation] = useState<WhatsAppConversation | null>(null)
   const [newMessage, setNewMessage] = useState("")
   const [searchTerm, setSearchTerm] = useState("")
-  const [connectionStatus, setConnectionStatus] = useState<"connected" | "connecting" | "disconnected">("disconnected")
-  const [qrCode, setQrCode] = useState<string | null>(null)
+  const [connectionStatus, setConnectionStatus] = useState<"connected" | "connecting" | "disconnected">(
+    "disconnected",
+  )
+  const [qrCode, setQrCode] = useState<string | null>(null) // used for provider callbacks
   const [isGeneratingQR, setIsGeneratingQR] = useState(false)
   const [provider, setProvider] = useState<ZApiProvider | null>(null)
+  const [mounted, setMounted] = useState(false)
+  const fallbackUrlRef = useRef<string | null>(null)
+
+  // token from local storage (if your app uses Bearer tokens)
+  const token = typeof window !== "undefined" ? localStorage.getItem("unicrm_access_token") : null
+
+  // use the hook created earlier
+  const { src: qrSrc, loading: qrLoading, error: qrError, generate: generateQrImage, revoke: revokeQr } = useQr({
+    apiBase: API_BASE_URL,
+    token: token, // if null, hook will try public image (cookie-based) first
+    cacheBuster: true,
+  })
 
   useEffect(() => {
     // Load conversations from storage
@@ -67,6 +83,15 @@ export default function WhatsAppIntegration({ open, onClose }: WhatsAppIntegrati
 
     // Check connection status
     checkConnectionStatus()
+    setMounted(true)
+
+    // cleanup on unmount - revoke any object URL created by hook
+    return () => {
+      try {
+        revokeQr()
+      } catch {}
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const checkConnectionStatus = async () => {
@@ -90,6 +115,26 @@ export default function WhatsAppIntegration({ open, onClose }: WhatsAppIntegrati
         setConnectionStatus("disconnected")
       }
     }
+  }
+
+  function normalizeClient(value: string) {
+    if (!value) return value
+    let v = value.trim()
+    const hasPrefix = v.startsWith("data:image")
+    let prefix = "data:image/png;base64,"
+    let raw = v
+    if (hasPrefix) {
+      const i = v.indexOf(",")
+      if (i >= 0) {
+        prefix = v.substring(0, i + 1)
+        raw = v.substring(i + 1)
+      }
+    }
+    raw = raw.replace(/^\d+@/, "")
+    const joined = raw.split(/[,|\s]+/).filter(Boolean).join("")
+    let cleaned = joined.replace(/[^A-Za-z0-9+/=]/g, "")
+    while (cleaned.length % 4 !== 0) cleaned += "="
+    return prefix + cleaned
   }
 
   const generateQRCode = async () => {
@@ -126,8 +171,9 @@ export default function WhatsAppIntegration({ open, onClose }: WhatsAppIntegrati
       }
 
       // Primeiro verificar status da conexão
+      // NOTE: apiClient is expected to be globally available (as before).
       const statusData = await apiClient.get<any>("/whatsapp/status")
-      
+
       // Se já estiver conectado, não gerar QR
       if (statusData.connected) {
         setConnectionStatus("connected")
@@ -137,20 +183,45 @@ export default function WhatsAppIntegration({ open, onClose }: WhatsAppIntegrati
         return
       }
 
-      // Se não estiver conectado, gerar QR Code
-      const rawText = await apiClient.getText("/whatsapp/qr")
-      console.log("[QR RAW TEXT RECEIVED]", rawText)
-      let base64
-      if (rawText.trim().startsWith("{")) {
-        const data = JSON.parse(rawText)
-        throw new Error(data.error || "Erro inesperado ao gerar QR")
-      } else {
-        base64 = rawText.trim()
+      // Use the hook to attempt fetching the image (public or with token). This ensures the frontend can display the QR safely.
+      try {
+        await generateQrImage()
+      } catch (e) {
+        // ignore - the hook sets error state if it fails
       }
-      if (!base64) {
-        throw new Error("QR Code vazio ou inválido retornado pelo backend")
+
+      // Prepare a stable fallback image URL with cache buster for this generation cycle
+      try {
+        fallbackUrlRef.current = `${API_BASE_URL}/whatsapp/qr/image?ts=${Date.now()}`
+      } catch {}
+
+      // Also keep original flow: request backend /whatsapp/qr to ensure provider/backend state is triggered
+      // This preserves previous behavior where backend is asked to produce QR and provider initializes
+      let value: string | null = null
+      try {
+        const json = await apiClient.post<{ value?: string; error?: string }>("/whatsapp/qr", {})
+        if (json.error) throw new Error(json.error)
+        value = json.value || null
+      } catch (e) {
+        try {
+          const rawText = await apiClient.getText("/whatsapp/qr")
+          const trimmed = rawText.trim()
+          if (trimmed.startsWith("{")) {
+            const data = JSON.parse(trimmed)
+            throw new Error(data.error || "Erro inesperado ao gerar QR")
+          }
+          value = trimmed
+        } catch (innerErr) {
+          // ignore; rely on hook fallback if available
+        }
       }
-      setQrCode(`data:image/png;base64,${base64}`)
+
+      // If backend returned a value, normalize and set (this supports provider callback fallback)
+      if (value) {
+        const norm = normalizeClient(value)
+        // prefer hook src if available; otherwise set provider QR state to normalized data URL
+        setQrCode(norm)
+      }
 
       // Get or create client ID
       const userId = loadFromStorage("current_user_id", "default_user")
@@ -168,7 +239,13 @@ export default function WhatsAppIntegration({ open, onClose }: WhatsAppIntegrati
       // Setup callbacks
       zapiProvider.onQRCodeGenerated((qr) => {
         console.log("[v0] QR Code received via callback")
-        setQrCode(qr)
+        // provider may send either base64 or data URL
+        const normalized = qr && typeof qr === "string" ? normalizeClient(qr) : null
+        if (normalized) {
+          setQrCode(normalized)
+        } else {
+          setQrCode(qr)
+        }
         setIsGeneratingQR(false)
       })
 
@@ -187,9 +264,9 @@ export default function WhatsAppIntegration({ open, onClose }: WhatsAppIntegrati
         }
       })
 
-      // Initialize provider
+      // Initialize provider (may cause provider to request/generate QR)
       await zapiProvider.initialize()
-      
+
       setIsGeneratingQR(false)
     } catch (error) {
       console.error("[v0] Error generating QR Code:", error)
@@ -214,6 +291,11 @@ export default function WhatsAppIntegration({ open, onClose }: WhatsAppIntegrati
     setQrCode(null)
     setProvider(null)
     saveToStorage(false, "whatsapp_connected")
+
+    // revoke any object url created by hook
+    try {
+      revokeQr()
+    } catch {}
 
     toast({
       title: "WhatsApp Desconectado",
@@ -296,9 +378,14 @@ export default function WhatsAppIntegration({ open, onClose }: WhatsAppIntegrati
     }
   }
 
+  if (!mounted) return null
+
+  // determine which source to show: prefer hook's safe src, then provider QR (data URL), else fallback to image endpoint
+  const imageSrc = qrSrc ?? qrCode ?? fallbackUrlRef.current
+
   return (
-    <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-6xl h-[80vh]">
+    <Dialog key="whatsapp-integration-dialog" open={open} onOpenChange={(v) => { if (!v) onClose() }}>
+      <DialogContent forceMount key={qrCode ? "content-with-qr" : "content-no-qr"} className="max-w-6xl h-[80vh]">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <MessageSquare className="h-5 w-5" />
@@ -345,7 +432,7 @@ export default function WhatsAppIntegration({ open, onClose }: WhatsAppIntegrati
                 </CardContent>
               </Card>
             </div>
-          ) : connectionStatus === "connecting" && qrCode ? (
+          ) : connectionStatus === "connecting" && imageSrc ? (
             <div className="flex items-center justify-center h-full">
               <Card className="w-full max-w-md">
                 <CardHeader className="text-center">
@@ -354,9 +441,11 @@ export default function WhatsAppIntegration({ open, onClose }: WhatsAppIntegrati
                 </CardHeader>
                 <CardContent className="text-center space-y-4">
                   <div className="flex justify-center p-4 bg-white rounded-lg border-2 border-gray-200">
-                    {qrCode ? (
+                    {imageSrc ? (
                       <img
-                        src={qrCode.startsWith("data:") ? qrCode : `data:image/png;base64,${qrCode}`}
+                        id="qrImg"
+                        key={(imageSrc || "").slice(0, 32)}
+                        src={imageSrc}
                         alt="QR Code WhatsApp"
                         className="w-64 h-64"
                       />
@@ -366,6 +455,12 @@ export default function WhatsAppIntegration({ open, onClose }: WhatsAppIntegrati
                       </div>
                     )}
                   </div>
+                  {qrError && (
+                    <div className="mt-2 text-sm text-red-600 flex items-center justify-center">
+                      <AlertCircle className="h-4 w-4 mr-2" />
+                      {qrError}
+                    </div>
+                  )}
                   <div className="space-y-2">
                     <p className="text-sm font-medium">Como conectar:</p>
                     <ol className="text-sm text-muted-foreground text-left space-y-1 pl-4">

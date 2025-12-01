@@ -373,21 +373,14 @@ export class ZApiProvider extends WhatsAppAPIProvider {
 
     try {
       console.log("[v0] Generating QR Code via backend for instance:", this.instanceId)
-      
-      // Use backend GET endpoint returning Base64
-      const rawText = await apiClient.getText("/whatsapp/qr")
-      const base64 = rawText.trim()
-      const qrCode = base64 ? `data:image/png;base64,${base64}` : ""
-      
-      if (!qrCode) {
-        throw new Error("No QR code data received from backend")
-      }
-      
-      // Start polling for connection status
+      // Prefer PNG bytes endpoint and return its URL (works in <img src>)
+      const qrUrl = `${API_BASE_URL}/whatsapp/qr/image?ts=${Date.now()}`
+
+      // Fire-and-forget status polling
       this.startStatusPolling()
 
-      console.log("[v0] QR Code generated successfully via backend")
-      return qrCode
+      console.log("[v0] QR Code URL generated:", qrUrl)
+      return qrUrl
     } catch (error) {
       console.error("[v0] Error generating QR Code via backend:", error)
       throw error

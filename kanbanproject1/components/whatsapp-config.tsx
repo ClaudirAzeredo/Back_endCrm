@@ -133,6 +133,7 @@ const [connectedFlag, setConnectedFlag] = useState(false)
         baseUrl,
         instanceId: (config as any).instanceId || parseZapiInstanceUrl(instanceUrlInput || "")?.instanceId || "",
         token: (config as any).instanceToken || parseZapiInstanceUrl(instanceUrlInput || "")?.instanceToken || "",
+        apiKey: config.apiKey || "",
         webhookUrl: config.webhookUrl || defaultWebhook,
       }
       if (!body.baseUrl || !body.instanceId || !body.token || !body.webhookUrl) {
@@ -202,7 +203,7 @@ const [connectedFlag, setConnectedFlag] = useState(false)
 
   return (
     <Dialog open={true} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+      <DialogContent forceMount className="max-w-4xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center">
             <MessageSquare className="h-5 w-5 mr-2" />
@@ -474,7 +475,7 @@ const [connectedFlag, setConnectedFlag] = useState(false)
                               setConnectionError("QR Code vazio ou inválido retornado pelo backend")
                               return
                             }
-                            setQrCode(trimmed.startsWith("data:image") ? trimmed : `data:image/png;base64,${trimmed}`)
+                            setQrCode(trimmed)
                           } else {
                             setConnectionError("Já conectado. Não é necessário gerar QR.")
                           }
@@ -504,7 +505,7 @@ const [connectedFlag, setConnectedFlag] = useState(false)
                     <div className="mt-3 p-3 bg-gray-50 border rounded-lg">
                       <p className="text-sm mb-2">Escaneie o QR abaixo no WhatsApp:</p>
                       {qrCode ? (
-                        <img src={`data:image/png;base64,${qrCode}`} alt="QR Code" className="w-64 h-64" />
+                        <img src={qrCode} alt="QR Code" className="w-64 h-64" />
                       ) : (
                         <div className="w-64 h-64 bg-gray-200 rounded flex items-center justify-center">
                           <p className="text-gray-500 text-sm">QR Code inválido</p>

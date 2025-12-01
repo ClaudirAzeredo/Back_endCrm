@@ -10,4 +10,5 @@ import java.util.List;
 public interface WhatsAppMessageRepository extends JpaRepository<WhatsAppMessage, Long> {
     List<WhatsAppMessage> findByContactIdOrderByTimestampAsc(String contactId);
     List<WhatsAppMessage> findAllByOrderByTimestampAsc();
+    List<WhatsAppMessage> findAllByCompanyIdIsNull();
 }

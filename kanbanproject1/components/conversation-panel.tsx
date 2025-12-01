@@ -39,7 +39,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
 import { loadFromStorage, saveToStorage } from "@/lib/storage"
-import { apiClient } from "@/lib/api-client"
+import { apiClient, API_BASE_URL } from "@/lib/api-client"
 import { Power } from "lucide-react"
 import {
   Dialog,
@@ -323,22 +323,8 @@ export default function ConversationPanel() {
       setIsGeneratingQR(true)
       setConnectionStatus("connecting")
       setConnectionError(null) // Limpar erro anterior
-      const rawText = await apiClient.getText("/whatsapp/qr")
-      const trimmed = rawText.trim()
-      let dataUrl
-      if (trimmed.startsWith("{")) {
-        const data = JSON.parse(trimmed)
-        setConnectionError(data.error || "Erro inesperado ao gerar QR")
-        setConnectionStatus("disconnected")
-        return
-      } else {
-        if (trimmed.startsWith("data:image")) {
-          dataUrl = trimmed
-        } else {
-          dataUrl = `data:image/png;base64,${trimmed}`
-        }
-      }
-      setQrCode(dataUrl)
+      const url = `${API_BASE_URL}/whatsapp/qr/image?ts=${Date.now()}`
+      setQrCode(url)
     } catch (error) {
       console.error("[v0] Erro ao gerar QR:", error)
       setConnectionStatus("disconnected")
@@ -382,16 +368,8 @@ export default function ConversationPanel() {
     
     try {
       console.log("[v0] Gerando QR via backend...")
-      const rawText2 = await apiClient.getText("/whatsapp/qr")
-      const trimmed = rawText2.trim()
-      if (trimmed.startsWith("{")) {
-        const data = JSON.parse(trimmed)
-        setConnectionError(data.error || "Erro inesperado ao gerar QR")
-        setConnectionStatus("disconnected")
-        hasRequestedQrRef.current = false
-        return
-      }
-      setQrCode(trimmed.startsWith("data:image") ? trimmed : `data:image/png;base64,${trimmed}`)
+      const url = `${API_BASE_URL}/whatsapp/qr/image?ts=${Date.now()}`
+      setQrCode(url)
     } catch (err) {
       console.error("[v0] Erro ao gerar QR:", err)
       console.error("[v0] Tipo do erro:", typeof err)

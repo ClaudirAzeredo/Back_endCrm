@@ -71,13 +71,14 @@ public class WhatsappService {
         body.put("phone", digitsOnly);
         body.put("message", request.getMensagem());
 
+        String headerApiKey = (apiKey != null && !apiKey.isBlank()) ? apiKey : zapiApiKey;
+        if (headerApiKey == null || headerApiKey.isBlank()) {
+            throw new RuntimeException("Client-Token ausente");
+        }
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
-        // Prefer company API key if configured; fallback to property
-        String headerApiKey = (apiKey != null && !apiKey.isBlank()) ? apiKey : zapiApiKey;
-        if (headerApiKey != null && !headerApiKey.isBlank()) {
-            headers.add("Client-Token", headerApiKey);
-        }
+        headers.add("Client-Token", headerApiKey);
+        headers.setBearerAuth(instanceToken);
 
         HttpEntity<Map<String, String>> entity = new HttpEntity<>(body, headers);
 

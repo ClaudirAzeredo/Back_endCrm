@@ -20,6 +20,8 @@ public class WhatsAppConfigService {
     private final CryptoUtil cryptoUtil;
     private final TenantResolver tenantResolver;
     private final RestTemplate restTemplate;
+    @Value("${zapi.api-key:}")
+    private String zapiApiKey;
 
     @Value("${zapi.instance-id:}")
     private String zapiInstanceIdProp;
@@ -41,8 +43,29 @@ public class WhatsAppConfigService {
     }
 
     public Optional<WhatsAppConfig> getCurrentCompanyConfig() {
-        String companyId = tenantResolver.getCurrentCompanyId();
-        return repository.findByCompanyId(companyId);
+        try {
+            String companyId = tenantResolver.getCurrentCompanyId();
+            return repository.findByCompanyId(companyId);
+        } catch (Exception ignored) {
+            try {
+                java.util.List<WhatsAppConfig> all = repository.findAll();
+                return all.isEmpty() ? Optional.empty() : Optional.of(all.get(0));
+            } catch (Exception e) {
+                return Optional.empty();
+            }
+        }
+    }
+
+    public String resolveCompanyIdByInstanceId(String instanceId) {
+        if (instanceId == null || instanceId.isBlank()) return null;
+        try {
+            Optional<WhatsAppConfig> opt = repository.findFirstByInstanceIdAndConnectedTrueOrderByIdAsc(instanceId);
+            if (opt.isEmpty()) {
+                opt = repository.findFirstByInstanceIdOrderByIdAsc(instanceId);
+            }
+            return opt.map(WhatsAppConfig::getCompanyId).orElse(null);
+        } catch (Exception ignored) {}
+        return null;
     }
 
     public WhatsAppConfig saveConfig(WhatsAppConfig incoming) {
@@ -135,12 +158,14 @@ public class WhatsAppConfigService {
     // Helper to resolve decrypted secrets when calling external APIs
     public String getApiKey() {
         try {
-            return getCurrentCompanyConfig()
+            String fromDb = getCurrentCompanyConfig()
                     .map(WhatsAppConfig::getApiKeyEncrypted)
                     .map(cryptoUtil::decrypt)
                     .orElse(null);
+            if (fromDb != null && !fromDb.isBlank()) return fromDb;
+            return (zapiApiKey != null && !zapiApiKey.isBlank()) ? zapiApiKey : null;
         } catch (Exception ex) {
-            return null;
+            return (zapiApiKey != null && !zapiApiKey.isBlank()) ? zapiApiKey : null;
         }
     }
 

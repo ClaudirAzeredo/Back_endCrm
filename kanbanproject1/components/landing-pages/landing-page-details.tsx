@@ -45,7 +45,9 @@ export default function LandingPageDetails({ landingPage, onBack }: LandingPageD
     link.download = `qrcode-${landingPage.name}.png`
     document.body.appendChild(link)
     link.click()
-    document.body.removeChild(link)
+    if (link.parentNode) {
+      link.parentNode.removeChild(link)
+    }
   }
 
   const formElement = landingPage.elements?.find((el) => el.type === "form")

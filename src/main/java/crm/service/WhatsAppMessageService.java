@@ -1,8 +1,11 @@
 package crm.service;
 
 import crm.dto.WhatsAppIncomingMessageDTO;
+import org.springframework.beans.factory.annotation.Autowired;
 import crm.entity.WhatsAppMessage;
 import crm.repository.WhatsAppMessageRepository;
+import crm.repository.WhatsAppContactRepository;
+import crm.entity.WhatsAppContact;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -12,6 +15,12 @@ import java.util.*;
 public class WhatsAppMessageService {
 
     private final WhatsAppMessageRepository repository;
+    @Autowired
+    private WhatsAppContactRepository contactRepository;
+    @Autowired
+    private WhatsAppSseService sseService;
+    @Autowired
+    private WhatsAppConfigService configService;
 
     public WhatsAppMessageService(WhatsAppMessageRepository repository) {
         this.repository = repository;
@@ -20,6 +29,7 @@ public class WhatsAppMessageService {
     public WhatsAppMessage saveIncomingMessage(Map<String, Object> messagePayload) {
         WhatsAppMessage m = new WhatsAppMessage();
         m.setExternalMessageId(asString(messagePayload.get("id")));
+        m.setCompanyId(asString(messagePayload.get("companyId")));
         m.setContactId(sanitize(asString(messagePayload.get("contactId")))); // phone/contact id (digits only)
         m.setContent(asString(messagePayload.get("content")));
 
@@ -36,7 +46,12 @@ public class WhatsAppMessageService {
         String status = asString(messagePayload.get("status"));
         m.setStatus(status != null && !status.isBlank() ? status : "received");
 
-        return repository.save(m);
+        WhatsAppMessage saved = repository.save(m);
+        try {
+            String clientKey = resolveClientKey();
+            sseService.publish(clientKey, Map.of("type","message","payload", mapMessage(saved)));
+        } catch (Exception ignore) {}
+        return saved;
     }
 
     public WhatsAppMessage saveIncomingMessage(WhatsAppIncomingMessageDTO dto) {
@@ -48,7 +63,12 @@ public class WhatsAppMessageService {
         m.setIsFromMe(Boolean.TRUE.equals(dto.getIsFromMe()));
         m.setMessageType(dto.getMessageType() != null && !dto.getMessageType().isBlank() ? dto.getMessageType() : "text");
         m.setStatus(dto.getStatus() != null && !dto.getStatus().isBlank() ? dto.getStatus() : "received");
-        return repository.save(m);
+        WhatsAppMessage saved = repository.save(m);
+        try {
+            String clientKey = resolveClientKey();
+            sseService.publish(clientKey, Map.of("type","message","payload", mapMessage(saved)));
+        } catch (Exception ignore) {}
+        return saved;
     }
 
     public List<Map<String, Object>> listConversations() {
@@ -82,14 +102,28 @@ public class WhatsAppMessageService {
 
     public List<Map<String, Object>> listMessagesForContact(String contactId) {
         String normalized = sanitize(contactId);
-        List<WhatsAppMessage> all = repository.findAllByOrderByTimestampAsc();
-        List<WhatsAppMessage> filtered = new ArrayList<>();
-        for (WhatsAppMessage m : all) {
-            if (normalized.equals(sanitize(m.getContactId()))) {
-                filtered.add(m);
+        List<WhatsAppMessage> filtered = repository.findByContactIdOrderByTimestampAsc(normalized);
+        return mapMessages(filtered);
+    }
+
+    public int backfillCompanyIdForNullMessages(String onlyContactId) {
+        List<WhatsAppMessage> missing = repository.findAllByCompanyIdIsNull();
+        int updated = 0;
+        for (WhatsAppMessage m : missing) {
+            if (onlyContactId != null && !onlyContactId.isBlank()) {
+                String normalized = sanitize(onlyContactId);
+                if (!normalized.equals(sanitize(m.getContactId()))) continue;
+            }
+            if (m.getContactId() != null && !m.getContactId().isBlank()) {
+                WhatsAppContact c = contactRepository.findById(sanitize(m.getContactId())).orElse(null);
+                if (c != null && c.getCompanyId() != null && !c.getCompanyId().isBlank()) {
+                    m.setCompanyId(c.getCompanyId());
+                    updated++;
+                }
             }
         }
-        return mapMessages(filtered);
+        if (updated > 0) repository.saveAll(missing);
+        return updated;
     }
 
     private List<Map<String, Object>> mapMessages(List<WhatsAppMessage> msgs) {
@@ -110,6 +144,15 @@ public class WhatsAppMessageService {
         mm.put("messageType", Optional.ofNullable(m.getMessageType()).orElse("text"));
         mm.put("status", Optional.ofNullable(m.getStatus()).orElse("received"));
         return mm;
+    }
+
+    private String resolveClientKey() {
+        return configService.getCurrentCompanyConfig()
+                .map(c -> {
+                    String iid = c.getInstanceId();
+                    return (iid != null && !iid.isBlank()) ? ("instance:" + iid) : "global";
+                })
+                .orElse("global");
     }
 
     private String asString(Object o) {
