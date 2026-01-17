@@ -94,7 +94,7 @@ export default function TaskCenter({
     search: "",
   })
 
-  const { tasks, isLoading: tasksLoading, createTask, updateTask, deleteTask } = useApiTasks()
+  const { tasks, isLoading: tasksLoading, createTask, updateTask, updateStatus, deleteTask } = useApiTasks()
   const { leads, isLoading: leadsLoading } = useApiLeads()
 
   // Use API data if available, otherwise fall back to props
@@ -173,7 +173,11 @@ export default function TaskCenter({
 
   const handleUpdateTask = async (taskId: string, updates: Partial<Task>) => {
     try {
-      await updateTask(taskId, updates)
+      if (typeof updates.status !== "undefined") {
+        await updateStatus(taskId, updates.status as any)
+      } else {
+        await updateTask(taskId, updates)
+      }
       onUpdateTask(taskId, updates)
     } catch (error) {
       console.error("[v0] Error updating task:", error)
@@ -612,7 +616,6 @@ function TaskListItem({
               onCheckedChange={(checked) => {
                 onUpdateTask(task.id, {
                   status: checked ? "completed" : "pending",
-                  completedAt: checked ? new Date().toISOString() : undefined,
                 })
               }}
             />
@@ -671,7 +674,6 @@ function TaskListItem({
               onValueChange={(value: TaskStatus) => {
                 onUpdateTask(task.id, {
                   status: value,
-                  completedAt: value === "completed" ? new Date().toISOString() : undefined,
                 })
               }}
             >

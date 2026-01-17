@@ -28,7 +28,7 @@ public class WhatsAppSseService {
                     .name("init")
                     .data(Map.of("ok", true, "ts", Instant.now().toString()))
                     .id(String.valueOf(System.nanoTime()))
-                    .reconnectTime(3000);
+                    .reconnectTime(8000);
             emitter.send(evt);
         } catch (IOException ignore) {}
         return emitter;
@@ -44,7 +44,7 @@ public class WhatsAppSseService {
                         .name("message")
                         .data(data, MediaType.APPLICATION_JSON)
                         .id(String.valueOf(System.nanoTime()))
-                        .reconnectTime(3000));
+                        .reconnectTime(8000));
             } catch (IOException ex) {
                 removeEmitter(key, em);
             }
@@ -56,4 +56,3 @@ public class WhatsAppSseService {
         if (list != null) list.remove(emitter);
     }
 }
-

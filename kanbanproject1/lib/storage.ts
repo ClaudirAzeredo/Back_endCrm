@@ -33,16 +33,30 @@ const getTenantStorageKey = (key: string, companyId?: string): string => {
 }
 
 export const loadFromStorage = (key?: string, defaultValue?: any): any => {
-  console.warn("[v0] loadFromStorage is deprecated. Use API hooks instead.")
-  return defaultValue || { leads: [], funnels: [], tasks: [], users: [] }
+  try {
+    if (typeof window === "undefined") return defaultValue
+    const storageKey = getTenantStorageKey(key || STORAGE_KEY)
+    const raw = localStorage.getItem(storageKey)
+    if (!raw) return defaultValue
+    return JSON.parse(raw)
+  } catch {
+    return defaultValue
+  }
 }
 
 export const saveToStorage = (data: any, key?: string) => {
-  console.warn("[v0] saveToStorage is deprecated. Use API hooks instead.")
+  try {
+    if (typeof window === "undefined") return
+    const storageKey = getTenantStorageKey(key || STORAGE_KEY)
+    localStorage.setItem(storageKey, JSON.stringify(data))
+  } catch {}
 }
 
 export const clearStorage = () => {
-  console.warn("[v0] clearStorage is deprecated. Use API hooks instead.")
+  try {
+    if (typeof window === "undefined") return
+    localStorage.clear()
+  } catch {}
 }
 
 export const getCurrentUser = (): User | null => {

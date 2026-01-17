@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
 import LeadsMovementDashboard from "./leads-movement-dashboard"
 import { loadFromStorage } from "@/lib/storage"
+import { useApiAuth } from "@/hooks/use-api-auth"
 import {
   TrendingUp,
   Users,
@@ -76,6 +77,7 @@ type DashboardProps = {
 const COLORS = ["#0088FE", "#00C49F", "#FFBB28", "#FF8042", "#8884D8", "#FF6B6B"]
 
 export default function Dashboard({ period, onPeriodChange }: DashboardProps) {
+  const { user } = useApiAuth()
   const [activeTab, setActiveTab] = useState("overview")
   const [viewMode, setViewMode] = useState<"standard" | "pizza">("standard")
   const [selectedFunnelId, setSelectedFunnelId] = useState<string>("all")
@@ -85,56 +87,33 @@ export default function Dashboard({ period, onPeriodChange }: DashboardProps) {
   const [funnels, setFunnels] = useState<Funnel[]>([])
 
   useEffect(() => {
-    console.log("[v0] Loading dashboard data...")
+    let mounted = true
+    const load = async () => {
+      try {
+        // Load funnels from storage (UI only) while backend provides stats
+        const storedFunnels = loadFromStorage("funnels", [])
+        const validFunnels = Array.isArray(storedFunnels) ? storedFunnels : []
+        if (mounted) setFunnels(validFunnels)
 
-    // Load funnels first
-    const storedFunnels = loadFromStorage("funnels", [])
-    const validFunnels = Array.isArray(storedFunnels) ? storedFunnels : []
-    console.log("[v0] Loaded funnels:", validFunnels.length)
+        // Fetch stats/charts from backend
+        const params: Record<string, any> = { period }
+        if (user?.companyId) params.companyId = user.companyId
+        if (selectedFunnelId && selectedFunnelId !== "all") params.funnelId = selectedFunnelId
+        const resp = await (await import("@/lib/api-client")).apiClient.get<any>(`/dashboard/leads`, params)
 
-    setFunnels(validFunnels)
-
-    // Load tasks
-    const storedTasks = loadFromStorage("tasks", [])
-    const validTasks = Array.isArray(storedTasks) ? storedTasks : []
-    console.log("[v0] Loaded tasks:", validTasks.length)
-
-    setTasks(validTasks)
-
-    // Load leads from each funnel
-    const allLeads: Lead[] = []
-    validFunnels.forEach((funnel: Funnel) => {
-      // Load leads for this specific funnel
-      const funnelLeads = loadFromStorage(`leads_${funnel.id}`, [])
-      console.log(`[v0] Loading leads for funnel ${funnel.name}:`, funnelLeads)
-
-      if (Array.isArray(funnelLeads)) {
-        // Add funnelId to each lead and process columns
-        const leadsWithFunnelId = funnelLeads.map((lead: any) => {
-          // Ensure lead has proper structure
-          const processedLead = {
-            id: lead.id || `lead-${Date.now()}-${Math.random()}`,
-            name: lead.name || lead.title || "Lead sem nome",
-            company: lead.company || "Empresa não informada",
-            status: lead.status || lead.columnId || "novo",
-            priority: lead.priority || "medium",
-            source: lead.source || "website",
-            estimatedValue: Number(lead.estimatedValue) || Number(lead.value) || 0,
-            expectedCloseDate: lead.expectedCloseDate || lead.dueDate || new Date().toISOString(),
-            createdAt: lead.createdAt || new Date().toISOString(),
-            funnelId: funnel.id,
-          }
-          return processedLead
-        })
-
-        console.log(`[v0] Processed ${leadsWithFunnelId.length} leads for funnel ${funnel.name}`)
-        allLeads.push(...leadsWithFunnelId)
+        // Derive minimal local lists for compatibility, if needed
+        // Use backend stats directly in UI via state replacement
+        if (mounted) {
+          // Patch computed memo sources by injecting backend values
+          (window as any).__dashboard_backend__ = resp
+        }
+      } catch (e) {
+        console.error("[v0] Failed to load dashboard from backend:", e)
       }
-    })
-
-    console.log("[v0] Total leads loaded:", allLeads.length)
-    setLeads(allLeads)
-  }, [])
+    }
+    load()
+    return () => { mounted = false }
+  }, [period, selectedFunnelId, user?.companyId])
 
   const filteredData = useMemo(() => {
     console.log("[v0] Filtering data for funnel:", selectedFunnelId)
@@ -164,6 +143,8 @@ export default function Dashboard({ period, onPeriodChange }: DashboardProps) {
   }, [leads, tasks, funnels, selectedFunnelId])
 
   const stats = useMemo(() => {
+    const backend = (typeof window !== "undefined" && (window as any).__dashboard_backend__) || null
+    if (backend?.stats) return backend.stats
     const { leads: filteredLeads, tasks: filteredTasks, selectedFunnel } = filteredData
     console.log("[v0] Calculating stats for", filteredLeads.length, "leads")
 
@@ -266,6 +247,8 @@ export default function Dashboard({ period, onPeriodChange }: DashboardProps) {
 
   // Dados para gráficos simplificados baseados no funil selecionado
   const chartData = useMemo(() => {
+    const backend = (typeof window !== "undefined" && (window as any).__dashboard_backend__) || null
+    if (backend?.charts) return backend.charts
     const { leads: filteredLeads, selectedFunnel } = filteredData
 
     // Leads por status (usando colunas do funil se selecionado)

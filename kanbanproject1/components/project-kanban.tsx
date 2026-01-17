@@ -78,6 +78,8 @@ import LeadDetailsDialog from "./lead-details-dialog"
 import KanbanSettings from "./kanban-settings"
 import KanbanTemplates from "./kanban-templates"
 import KanbanAutomations from "./kanban-automations"
+import { automationsApi } from "@/lib/api/automations-api"
+import { apiClient } from "@/lib/api-client"
 import TaskCenter from "./task-center"
 import LeadsHistoryDashboard from "./leads-history-dashboard"
 import FunnelManager from "./funnel-manager"
@@ -464,9 +466,15 @@ export default function LeadKanban() {
     const storedTasks = loadFromStorage("tasks", [])
     setTasks(Array.isArray(storedTasks) ? storedTasks : [])
 
-    const storedAutomations = loadFromStorage("automations", [])
-    console.log("[v0] Loading automations:", storedAutomations)
-    setAutomations(Array.isArray(storedAutomations) ? storedAutomations : [])
+    ;(async () => {
+      try {
+        const apiAutos = await automationsApi.getAutomations()
+        setAutomations(Array.isArray(apiAutos) ? apiAutos as any : [])
+      } catch (e) {
+        const storedAutomations = loadFromStorage("automations", [])
+        setAutomations(Array.isArray(storedAutomations) ? storedAutomations : [])
+      }
+    })()
 
     const storedStates = loadFromStorage("batch_transfer_states", [])
     setBatchTransferStates(Array.isArray(storedStates) ? storedStates : [])
@@ -677,8 +685,49 @@ export default function LeadKanban() {
 
   // Função para executar automações
   const executeAutomationActions = async (automation: Automation, lead: Lead) => {
+    const normalizePhone = (raw?: string) => (raw || "").replace(/[^0-9]/g, "")
+    const formatTemplate = (template: string, vars: Record<string, string> = {}) => {
+      const defaults: Record<string, string> = {
+        client_name: lead.client || "",
+        company_name: lead.title || "",
+        deadline: lead.expectedCloseDate || "",
+      }
+      const merged = { ...defaults, ...vars }
+      return Object.keys(merged).reduce((msg, key) => msg.replace(new RegExp(`\\{${key}\\}`, "g"), merged[key] || ""), template)
+    }
     for (const action of automation.actions) {
       switch (action.type) {
+        case "whatsapp": {
+          const tpl = formatTemplate((action as any).template || "", (action as any).variables || {})
+          if (!tpl || !tpl.trim()) { break }
+          const recType = (action as any).recipients || "lead_contact"
+          const recipients: string[] = []
+          if (recType === "lead_contact") {
+            if (lead.clientPhone) recipients.push(normalizePhone(lead.clientPhone))
+          } else if (recType === "assigned") {
+            if (lead.assignedTo?.phone) recipients.push(normalizePhone(lead.assignedTo.phone))
+          } else if (recType === "custom") {
+            const list = (action as any).customRecipients || []
+            list.forEach((p: string) => recipients.push(normalizePhone(p)))
+          } else if (recType === "all_members") {
+            (availableUsers || []).forEach((u: any) => { if (u?.phone) recipients.push(normalizePhone(u.phone)) })
+          }
+
+          const uniqueRecipients = Array.from(new Set(recipients.filter(Boolean)))
+          for (const phone of uniqueRecipients) {
+            if (!phone || phone.length < 10) { continue }
+            try {
+              await apiClient.post("/whatsapp/send-message", { contactId: phone, message: tpl, timestamp: new Date().toISOString() })
+              const nowISO = new Date().toISOString()
+              void leadsApi.addInteraction(lead.id, { type: "note", date: nowISO, notes: `WhatsApp enviado para ${phone}` })
+            } catch (err) {
+              console.error("[v0] Falha ao enviar WhatsApp via API", err)
+              const nowISO = new Date().toISOString()
+              void leadsApi.addInteraction(lead.id, { type: "note", date: nowISO, notes: `Falha ao enviar WhatsApp para ${phone}` })
+            }
+          }
+          break
+        }
         case "batch_transfer":
           if (action.targetFunnelId && action.targetStageId) {
             // Calculate interval in milliseconds
@@ -1465,9 +1514,14 @@ export default function LeadKanban() {
     }
 
     // Executar automações se houver
-    const automation = automations.find((auto) => auto.columnId === destination.droppableId && auto.active)
+    const automation = automations.find((auto) => auto.columnId === destination.droppableId && auto.active && auto.trigger === "on_enter")
     if (automation) {
-      await executeAutomationActions(automation, lead) // Executa as ações da automação
+      const delayMin = automation.delay || 0
+      if (delayMin > 0) {
+        setTimeout(() => { void executeAutomationActions(automation, lead) }, delayMin * 60 * 1000)
+      } else {
+        await executeAutomationActions(automation, lead)
+      }
 
       toast({
         title: "Automação executada",
@@ -2454,8 +2508,30 @@ export default function LeadKanban() {
         <KanbanAutomations
           columns={currentColumns}
           automations={automations}
-          onSave={(newAutomations) => {
-            setAutomations(newAutomations)
+          onSave={async (newAutomations) => {
+            try {
+              // Upsert via API
+              for (const a of newAutomations) {
+                const payload = {
+                  name: a.name,
+                  columnId: a.columnId,
+                  trigger: a.trigger as any,
+                  actions: a.actions as any,
+                  active: a.active,
+                  delay: a.delay,
+                }
+                if (a.id) {
+                  await automationsApi.updateAutomation(a.id, payload)
+                } else {
+                  const created = await automationsApi.createAutomation(payload)
+                  a.id = created.id
+                }
+              }
+              const latest = await automationsApi.getAutomations()
+              setAutomations(latest as any)
+            } catch (e) {
+              console.error("[v0] Falha ao salvar automações via API", e)
+            }
             setShowAutomations(false)
           }}
           onClose={() => setShowAutomations(false)}
