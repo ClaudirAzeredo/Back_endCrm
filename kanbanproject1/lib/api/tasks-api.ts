@@ -64,12 +64,20 @@ export const tasksApi = {
 
   // Create task
   async createTask(data: CreateTaskRequest): Promise<Task> {
-    return apiClient.post<Task>("/tasks", data)
+    const payload = { ...data }
+    if (payload.dueDate && !payload.dueDate.includes("T")) {
+      payload.dueDate = `${payload.dueDate}T00:00:00Z`
+    }
+    return apiClient.post<Task>("/tasks", payload)
   },
 
   // Update task
   async updateTask(id: string, data: UpdateTaskRequest): Promise<Task> {
-    return apiClient.put<Task>(`/tasks/${id}`, data)
+    const payload = { ...data }
+    if (payload.dueDate && typeof payload.dueDate === "string" && !payload.dueDate.includes("T")) {
+      payload.dueDate = `${payload.dueDate}T00:00:00Z`
+    }
+    return apiClient.put<Task>(`/tasks/${id}`, payload)
   },
 
   // Delete task

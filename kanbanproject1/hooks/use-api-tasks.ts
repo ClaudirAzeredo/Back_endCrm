@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect, useCallback } from "react"
+import { useApiAuth } from "@/hooks/use-api-auth"
 import { tasksApi, type Task } from "@/lib/api/tasks-api"
 import { ApiError } from "@/lib/api-client"
 
@@ -11,6 +12,7 @@ interface UseTasksReturn {
   fetchTasks: () => Promise<void>
   createTask: (data: any) => Promise<Task>
   updateTask: (id: string, data: any) => Promise<Task>
+  updateStatus: (id: string, status: "pending" | "in_progress" | "completed" | "cancelled") => Promise<Task>
   deleteTask: (id: string) => Promise<void>
   clearError: () => void
 }
@@ -19,13 +21,16 @@ export function useApiTasks(): UseTasksReturn {
   const [tasks, setTasks] = useState<Task[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const { user } = useApiAuth()
 
   const fetchTasks = useCallback(async () => {
     setIsLoading(true)
     setError(null)
 
     try {
-      const data = await tasksApi.getTasks()
+      const params: any = {}
+      if (user?.companyId) params.companyId = user.companyId
+      const data = await tasksApi.getTasks(params)
       setTasks(data)
       console.log("[v0] Tasks fetched:", data.length)
     } catch (err) {
@@ -35,14 +40,16 @@ export function useApiTasks(): UseTasksReturn {
     } finally {
       setIsLoading(false)
     }
-  }, [])
+  }, [user?.companyId])
 
   const createTask = useCallback(async (data: any): Promise<Task> => {
     setIsLoading(true)
     setError(null)
 
     try {
-      const newTask = await tasksApi.createTask(data)
+      const payload = { ...data }
+      if (user?.companyId) payload.companyId = user.companyId
+      const newTask = await tasksApi.createTask(payload)
       setTasks((prev) => [...prev, newTask])
       console.log("[v0] Task created:", newTask)
       return newTask
@@ -69,6 +76,25 @@ export function useApiTasks(): UseTasksReturn {
       const errorMessage = err instanceof ApiError ? err.message : "Erro ao atualizar tarefa"
       setError(errorMessage)
       console.error("[v0] Update task error:", err)
+      throw err
+    } finally {
+      setIsLoading(false)
+    }
+  }, [])
+
+  const updateStatus = useCallback(async (id: string, status: "pending" | "in_progress" | "completed" | "cancelled"): Promise<Task> => {
+    setIsLoading(true)
+    setError(null)
+
+    try {
+      const updatedTask = await tasksApi.updateStatus(id, { status })
+      setTasks((prev) => prev.map((t) => (t.id === id ? updatedTask : t)))
+      console.log("[v0] Task status updated:", updatedTask)
+      return updatedTask
+    } catch (err) {
+      const errorMessage = err instanceof ApiError ? err.message : "Erro ao atualizar status da tarefa"
+      setError(errorMessage)
+      console.error("[v0] Update task status error:", err)
       throw err
     } finally {
       setIsLoading(false)
@@ -109,6 +135,7 @@ export function useApiTasks(): UseTasksReturn {
     fetchTasks,
     createTask,
     updateTask,
+    updateStatus,
     deleteTask,
     clearError,
   }

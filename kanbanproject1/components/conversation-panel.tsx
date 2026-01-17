@@ -49,6 +49,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { useWhatsappSse, type WhatsAppEvent } from "@/hooks/use-whatsapp-sse"
+import { WhatsAppPresenceIndicator, type ChatPresenceData } from "@/components/whatsapp-presence-indicator"
+import { WhatsAppStatusMonitor } from "@/components/whatsapp-status-monitor"
+import { WhatsAppMessageStatus, type MessageStatusData } from "@/components/whatsapp-message-status"
 
 type UserRole = "admin" | "client"
 
@@ -115,11 +119,84 @@ export default function ConversationPanel() {
   const [activePresetId, setActivePresetId] = useState<string | null>(null)
   const [showSavePresetDialog, setShowSavePresetDialog] = useState(false)
   const [presetName, setPresetName] = useState("")
+  const [chatPresenceMap, setChatPresenceMap] = useState<Map<string, ChatPresenceData>>(new Map())
+  const [messageStatusMap, setMessageStatusMap] = useState<Map<string, MessageStatusData>>(new Map())
+  const [showStatusMonitor, setShowStatusMonitor] = useState(false)
+
+  // UI overrides to persist local actions between refreshes
+  const [readContacts, setReadContacts] = useState<Set<string>>(new Set())
+  const [deletedContacts, setDeletedContacts] = useState<Set<string>>(new Set())
+
+  const READ_STORAGE_KEY = "unicrm_chat_read_contacts"
+  const DELETED_STORAGE_KEY = "unicrm_chat_deleted_contacts"
+  const messagesEndRef = useRef<HTMLDivElement>(null)
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [contactToDelete, setContactToDelete] = useState<WhatsAppContact | null>(null)
+  const [isLoadingMessages, setIsLoadingMessages] = useState(false)
+  const [loadedMessagesCount, setLoadedMessagesCount] = useState(50) // Initial number of messages to load
 
   // QR Code auto-generation states and refs
   const hasRequestedQrRef = useRef(false) // evita múltiplas requisições concorrentes
 
   const LOCAL_KEY = "unicrm_whatsapp_config"
+  const CONNECTED_STORAGE_KEY = "whatsapp_connected"
+
+  // Initialize WhatsApp SSE connection
+  const sse = useWhatsappSse({
+    apiBase: API_BASE_URL,
+    clientKey: loadFromStorage("clientKey", "")
+  })
+
+  // Start SSE connection when connected to WhatsApp
+  useEffect(() => {
+    if (isConnected) {
+      sse.start()
+    } else {
+      sse.stop()
+    }
+  }, [isConnected, sse])
+
+  // Process chat presence events from SSE
+  useEffect(() => {
+    if (sse.lastChatPresence) {
+      const event = sse.lastChatPresence
+      const phone = event.payload.phone || event.payload.contactId
+      if (phone) {
+        setChatPresenceMap(prev => {
+          const newMap = new Map(prev)
+          newMap.set(phone, {
+            phone,
+            status: event.payload.status || "UNAVAILABLE",
+            lastSeen: event.payload.lastSeen,
+            instanceId: event.payload.instanceId
+          })
+          return newMap
+        })
+      }
+    }
+  }, [sse.lastChatPresence])
+
+  // Process message status events from SSE
+  useEffect(() => {
+    if (sse.lastMessageStatus) {
+      const event = sse.lastMessageStatus
+      const phone = event.payload.phone || event.payload.contactId
+      if (phone) {
+        setMessageStatusMap(prev => {
+          const newMap = new Map(prev)
+          newMap.set(phone, {
+            phone,
+            status: event.payload.status || "SENT",
+            ids: event.payload.ids || [],
+            instanceId: event.payload.instanceId,
+            isGroup: event.payload.isGroup,
+            momment: event.payload.momment
+          })
+          return newMap
+        })
+      }
+    }
+  }, [sse.lastMessageStatus])
 
   useEffect(() => {
     // Check if WhatsApp service is configured
@@ -144,6 +221,22 @@ export default function ConversationPanel() {
 
     loadFilterOptions()
     loadFilterPresets()
+
+    // Load local overrides for read/deleted
+    try {
+      if (typeof window !== "undefined") {
+        const rawRead = localStorage.getItem(READ_STORAGE_KEY)
+        if (rawRead) {
+          const arr = JSON.parse(rawRead)
+          if (Array.isArray(arr)) setReadContacts(new Set(arr))
+        }
+        const rawDeleted = localStorage.getItem(DELETED_STORAGE_KEY)
+        if (rawDeleted) {
+          const arr2 = JSON.parse(rawDeleted)
+          if (Array.isArray(arr2)) setDeletedContacts(new Set(arr2))
+        }
+      }
+    } catch {}
 
     // Setup real-time listeners with cleanup
     const messageCb = (message: WhatsAppMessage) => {
@@ -230,7 +323,7 @@ export default function ConversationPanel() {
   const qrPollRef = useRef<number | null>(null)
   const statusPollRef = useRef<number | null>(null)
 
-  // Status polling to detect connection changes - only when connecting or connected
+  // Status polling para conectar apenas durante processo de conexão manual
   useEffect(() => {
     // Clear existing status poll
     if (statusPollRef.current) {
@@ -238,18 +331,19 @@ export default function ConversationPanel() {
       statusPollRef.current = null
     }
 
-    // Start status polling when connecting or connected
-    if (connectionStatus === "connecting" || isConnected) {
+    // Start status polling only when connecting
+    if (connectionStatus === "connecting") {
       statusPollRef.current = window.setInterval(async () => {
         try {
           const status = await apiClient.get<any>("/whatsapp/status")
           const connected = Boolean(status?.connected)
           const smartphoneConnected = Boolean(status?.smartphoneConnected)
           const session = Boolean(status?.session)
-          
-          console.log("[v0] Status check:", { connected, smartphoneConnected, session })
-          
-          if (connected && (smartphoneConnected || session)) {
+          const sessionActive = Boolean(status?.sessionActive)
+
+          console.log("[v0] Status check:", { connected, smartphoneConnected, session, sessionActive })
+
+          if (connected && (smartphoneConnected || session || sessionActive)) {
             // Connected - stop polling and load data
             if (statusPollRef.current) {
               clearInterval(statusPollRef.current)
@@ -262,6 +356,7 @@ export default function ConversationPanel() {
             setConnectionStatus("connected")
             setIsConnected(true)
             setQrCode(null)
+            try { localStorage.setItem(CONNECTED_STORAGE_KEY, "true") } catch {}
             await loadContacts()
             await loadConversations()
           }
@@ -271,9 +366,10 @@ export default function ConversationPanel() {
           if (connectionStatus !== "connecting") {
             setConnectionStatus("disconnected")
             setIsConnected(false)
+            try { localStorage.setItem(CONNECTED_STORAGE_KEY, "false") } catch {}
           }
         }
-      }, 3000)
+      }, 8000)
     }
 
     return () => {
@@ -284,39 +380,45 @@ export default function ConversationPanel() {
     }
   }, [connectionStatus, isConnected])
 
-  // useEffect que observa `status` e decide gerar QR automaticamente
+  // Desativado: não gerar QR automaticamente e não revalidar estado ao mudar connectionStatus
+  useEffect(() => {}, [connectionStatus])
+
+  // Verificação inicial de conexão ao montar (valida uma única vez; depois confia no storage)
   useEffect(() => {
-    // Função auxiliar para obter status atual
-    const checkStatusAndGenerateQr = async () => {
+    const initStatus = async () => {
       try {
-        const status = await apiClient.get<any>("/whatsapp/status")
-        
-        // Se já conectado, limpar QR (opcional) e resetar flag
-        if (status?.connected) {
-          if (qrCode) setQrCode(null)
-          hasRequestedQrRef.current = false
+        // Trust local storage if marked connected
+        const localConnected = (() => {
+          try { return localStorage.getItem(CONNECTED_STORAGE_KEY) === "true" } catch { return false }
+        })()
+        if (localConnected) {
+          setConnectionStatus("connected")
+          setIsConnected(true)
+          await loadContacts()
+          await loadConversations()
           return
         }
-        
-        // Se NÃO conectado → gerar QR (apenas uma vez)
-        if (!status?.connected && !qrCode && !isGeneratingQR) {
-          console.log("[v0] Status desconectado - vai chamar generateQr()", {connected: status?.connected, qrCode, isGeneratingQR})
-          // pequena espera para evitar disparos imediatos em rápidos polls
-          const t = setTimeout(() => {
-            generateQr()
-          }, 250) // 250ms: evita alguns race-conditions; ajuste se quiser
-          return () => clearTimeout(t)
+
+        // Single backend validation when not yet validated
+        const status = await apiClient.get<any>("/whatsapp/status")
+        const connected = Boolean(status?.connected || status?.sessionActive)
+        if (connected) {
+          setConnectionStatus("connected")
+          setIsConnected(true)
+          try { localStorage.setItem(CONNECTED_STORAGE_KEY, "true") } catch {}
+          await loadContacts()
+          await loadConversations()
+        } else {
+          setConnectionStatus("disconnected")
+          setIsConnected(false)
+          try { localStorage.setItem(CONNECTED_STORAGE_KEY, "false") } catch {}
         }
-      } catch (error) {
-        console.error("[v0] Erro ao verificar status para gerar QR:", error)
+      } catch (e) {
+        console.error("[v0] init status error:", e)
       }
     }
-
-    // Executar verificação apenas quando estiver desconectado
-    if (connectionStatus === "disconnected" && !isConnected) {
-      checkStatusAndGenerateQr()
-    }
-  }, [connectionStatus, isConnected]) // roda quando status de conexão mudar
+    initStatus()
+  }, [])
 
   const generateQRCode = async () => {
     try {
@@ -343,7 +445,8 @@ export default function ConversationPanel() {
         const connected = Boolean(status?.connected)
         const smartphoneConnected = Boolean(status?.smartphoneConnected)
         const session = Boolean(status?.session)
-        if (connected && (smartphoneConnected || session)) {
+        const sessionActive = Boolean(status?.sessionActive)
+        if (connected && (smartphoneConnected || session || sessionActive)) {
           if (qrPollRef.current) {
             clearInterval(qrPollRef.current)
             qrPollRef.current = null
@@ -355,7 +458,7 @@ export default function ConversationPanel() {
           await loadConversations()
         }
       } catch {}
-    }, 3000)
+    }, 5000)
   }
 
   // Função para gerar QR automaticamente (sem interação do usuário)
@@ -460,9 +563,9 @@ export default function ConversationPanel() {
       }
     }
 
-    // Read/Unread filter
+    // Read/Unread filter (respect local overrides)
     if (filters.readStatus.length > 0) {
-      const isRead = conversation.unreadCount === 0
+      const isRead = getUnreadCount(contact) === 0
       if (filters.readStatus.includes("lido") && !isRead) return false
       if (filters.readStatus.includes("nao_lido") && isRead) return false
     }
@@ -491,11 +594,36 @@ export default function ConversationPanel() {
     return true
   }
 
-  const filteredContacts = contacts.filter(
-    (contact) =>
-      (contact.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        contact.phone.toLowerCase().includes(searchTerm.toLowerCase())) &&
-      applyFilters(contact),
+  // Sort contacts by last message time (most recent first)
+  const sortContactsByLastMessage = (contacts: WhatsAppContact[]): WhatsAppContact[] => {
+    return [...contacts].sort((a, b) => {
+      const convA = getConversation(a.id)
+      const convB = getConversation(b.id)
+      
+      const timeA = convA?.lastMessage?.timestamp || 0
+      const timeB = convB?.lastMessage?.timestamp || 0
+      
+      return new Date(timeB).getTime() - new Date(timeA).getTime()
+    })
+  }
+
+  const filteredContacts = sortContactsByLastMessage(
+    contacts.filter(
+      (contact) => {
+        const nameMatch = contact.name.toLowerCase().includes(searchTerm.toLowerCase())
+        const phoneMatch = contact.phone.toLowerCase().includes(searchTerm.toLowerCase())
+        
+        // Search in message content
+        const conversation = getConversation(contact.id)
+        const messageMatch = conversation?.messages?.some(message => 
+          message.content.toLowerCase().includes(searchTerm.toLowerCase())
+        ) || false
+        
+        // Exclude deleted locally
+        const notDeleted = !deletedContacts.has(contact.id)
+        return notDeleted && (nameMatch || phoneMatch || messageMatch) && applyFilters(contact)
+      }
+    )
   )
 
   const toggleFilter = (filterType: keyof ConversationFilters, value: string) => {
@@ -539,7 +667,7 @@ export default function ConversationPanel() {
     return labels[status] || status
   }
 
-  // Send message
+  // Send message with auto-scroll
   const sendMessage = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!messageInput.trim() || !activeContact) return
@@ -550,6 +678,13 @@ export default function ConversationPanel() {
         setMessageInput("")
         await loadConversations()
         console.log("[v0] Message sent successfully")
+        
+        // Auto-scroll to bottom after sending message
+        setTimeout(() => {
+          if (messagesEndRef.current) {
+            messagesEndRef.current.scrollIntoView({ behavior: 'smooth' })
+          }
+        }, 100)
       }
     } catch (error) {
       console.error("[v0] Error sending message:", error)
@@ -567,19 +702,28 @@ export default function ConversationPanel() {
     return conversation?.lastMessage?.content || "Nenhuma mensagem"
   }
 
-  // Get last message time for contact
+  // Get last message time for contact with relative formatting
   const getLastMessageTime = (contact: WhatsAppContact): string => {
     const conversation = getConversation(contact.id)
     if (!conversation?.lastMessage) return ""
 
     const messageDate = new Date(conversation.lastMessage.timestamp)
     const now = new Date()
-    const diffInHours = (now.getTime() - messageDate.getTime()) / (1000 * 60 * 60)
+    const diffInMs = now.getTime() - messageDate.getTime()
+    const diffInMinutes = Math.floor(diffInMs / (1000 * 60))
+    const diffInHours = Math.floor(diffInMs / (1000 * 60 * 60))
+    const diffInDays = Math.floor(diffInMs / (1000 * 60 * 60 * 24))
 
-    if (diffInHours < 1) {
-      return messageDate.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })
+    if (diffInMinutes < 1) {
+      return "agora"
+    } else if (diffInMinutes < 60) {
+      return `${diffInMinutes} min atrás`
     } else if (diffInHours < 24) {
-      return messageDate.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })
+      return `${diffInHours}h atrás`
+    } else if (diffInDays === 1) {
+      return "ontem"
+    } else if (diffInDays < 7) {
+      return `${diffInDays} dias atrás`
     } else {
       return messageDate.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })
     }
@@ -588,7 +732,39 @@ export default function ConversationPanel() {
   // Get unread count for contact
   const getUnreadCount = (contact: WhatsAppContact): number => {
     const conversation = getConversation(contact.id)
+    if (readContacts.has(contact.id)) return 0
     return conversation?.unreadCount || 0
+  }
+
+  // Open conversation and mark as read
+  const openConversation = async (contact: WhatsAppContact) => {
+    setActiveContact(contact)
+    setReadContacts(prev => {
+      const next = new Set(prev)
+      next.add(contact.id)
+      try {
+        if (typeof window !== "undefined") {
+          localStorage.setItem(READ_STORAGE_KEY, JSON.stringify(Array.from(next)))
+        }
+      } catch {}
+      return next
+    })
+    // Optimistically mark as read in UI
+    setConversations(prev => {
+      const next = new Map(prev)
+      const conv = next.get(contact.id)
+      if (conv) {
+        next.set(contact.id, { ...conv, unreadCount: 0 })
+      }
+      return next
+    })
+    // Notify backend to mark chat as read
+    try {
+      const phone = (contact.phone || contact.id || "").replace(/\D/g, "")
+      if (phone) {
+        await apiClient.post("/whatsapp/modify-chat", { phone, action: "read" })
+      }
+    } catch {}
   }
 
   const syncContactsToBackend = async () => {
@@ -606,6 +782,68 @@ export default function ConversationPanel() {
     } catch (error) {
       console.error("[v0] Error syncing contacts:", error)
     }
+  }
+
+  // Delete conversation function
+  const deleteConversation = async (contact: WhatsAppContact) => {
+    try {
+      // Mark as deleted locally (persist across refreshes)
+      setDeletedContacts(prev => {
+        const next = new Set(prev)
+        next.add(contact.id)
+        try {
+          if (typeof window !== "undefined") {
+            localStorage.setItem(DELETED_STORAGE_KEY, JSON.stringify(Array.from(next)))
+          }
+        } catch {}
+        return next
+      })
+
+      // Clear active contact if it's the deleted one
+      if (activeContact?.id === contact.id) {
+        setActiveContact(null)
+      }
+
+      // Notify backend (if supported) to delete chat
+      try {
+        const phone = (contact.phone || contact.id || "").replace(/\D/g, "")
+        if (phone) {
+          await apiClient.post("/whatsapp/modify-chat", { phone, action: "delete" })
+        }
+      } catch {}
+
+      console.log("[v0] Conversation marked deleted:", contact.id)
+    } catch (error) {
+      console.error("[v0] Error deleting conversation:", error)
+    }
+  }
+
+  // Archive conversation function
+  const archiveConversation = async (contact: WhatsAppContact) => {
+    try {
+      // Update conversation status to archived
+      setConversations(prev => {
+        const newMap = new Map(prev)
+        const conversation = newMap.get(contact.id)
+        if (conversation) {
+          newMap.set(contact.id, { ...conversation, status: "arquivado" })
+        }
+        return newMap
+      })
+      
+      console.log("[v0] Conversation archived:", contact.id)
+    } catch (error) {
+      console.error("[v0] Error archiving conversation:", error)
+    }
+  }
+
+  // Load more messages for lazy loading
+  const loadMoreMessages = () => {
+    setIsLoadingMessages(true)
+    setTimeout(() => {
+      setLoadedMessagesCount(prev => prev + 50)
+      setIsLoadingMessages(false)
+    }, 500)
   }
 
   useEffect(() => {
@@ -804,11 +1042,24 @@ export default function ConversationPanel() {
   return (
     <div className="flex flex-col md:flex-row h-auto md:h-[calc(100vh-200px)] border rounded-lg overflow-hidden">
       {/* Contacts panel */}
-      <div className="w-full md:w-1/3 border-b md:border-b-0 md:border-r flex flex-col max-h-[50vh] md:max-h-none">
-        <div className="p-3 border-b">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="font-medium text-sm md:text-base">Conversas</h2>
+      <div className="w-full md:w-1/3 border-b md:border-b-0 md:border-r flex flex-col h-full min-h-0 bg-gradient-to-b from-white to-gray-50">
+        {/* Enhanced Header with UniCRM Identity */}
+        <div className="p-4 border-b bg-gradient-to-r from-green-50 to-blue-50 shadow-sm border-green-100">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="font-bold text-lg md:text-xl text-gray-900 flex items-center gap-2">
+              <MessageSquare className="h-5 w-5 text-green-600" />
+              Conversas
+            </h2>
             <div className="flex items-center gap-1">
+              <Button 
+                variant="ghost" 
+                size="icon" 
+                className="h-8 w-8 md:h-10 md:w-10"
+                onClick={() => setShowStatusMonitor(true)}
+                title="Monitor de Status WhatsApp"
+              >
+                <MessageSquare className="h-4 w-4" />
+              </Button>
               <Popover open={showFilters} onOpenChange={setShowFilters}>
                 <PopoverTrigger asChild>
                   <Button variant="ghost" size="icon" className="relative h-8 w-8 md:h-10 md:w-10">
@@ -1035,29 +1286,40 @@ export default function ConversationPanel() {
               </Popover>
             </div>
           </div>
-          <div className="relative">
-            <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+          {/* Enhanced Search Bar with UniCRM Styling */}
+          <div className="relative mb-4">
+            <Search className="absolute left-3 top-3.5 h-4 w-4 text-green-500" />
             <Input
-              placeholder="Buscar conversas..."
-              className="pl-8 text-sm"
+              placeholder="Pesquisar por nome, número ou mensagem..."
+              className="pl-10 pr-4 py-3 text-sm border-2 border-green-200 rounded-lg shadow-sm focus:ring-2 focus:ring-green-500 focus:border-green-500 transition-all bg-white hover:border-green-300"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
             />
           </div>
         </div>
 
-        <Tabs defaultValue="all" className="flex-1 flex flex-col">
-          <TabsList className="grid grid-cols-2 mx-3 mt-2">
-            <TabsTrigger value="all">Todos</TabsTrigger>
-            <TabsTrigger value="whatsapp">
-              <MessageSquare className="h-4 w-4 mr-1" />
-              WhatsApp - UniCRM
+        {/* Enhanced Tabs with UniCRM Colors */}
+        <Tabs defaultValue="all" className="flex-1 flex flex-col min-h-0">
+          <TabsList className="grid grid-cols-2 mx-4 mt-3 mb-2 bg-green-50 p-1 rounded-lg border border-green-100">
+            <TabsTrigger value="all" className="text-sm font-medium data-[state=active]:bg-white data-[state=active]:text-green-700 data-[state=active]:shadow-sm rounded-md transition-all">
+              Todos
+            </TabsTrigger>
+            <TabsTrigger value="whatsapp" className="text-sm font-medium data-[state=active]:bg-white data-[state=active]:text-green-700 data-[state=active]:shadow-sm rounded-md transition-all">
+              <MessageSquare className="h-4 w-4 mr-1 inline" />
+              WhatsApp
             </TabsTrigger>
           </TabsList>
 
-          <ScrollArea className="flex-1">
+          <ScrollArea className="flex-1 h-full min-h-0 overflow-y-auto">
             <TabsContent value="all" className="m-0">
-              {filteredContacts.map((contact) => (
+              {(() => {
+                const dedup = Array.from(new Map(filteredContacts.map(c => [c.id, c])).values())
+                const sorted = dedup.sort((a, b) => {
+                  const ta = getConversation(a.id)?.lastMessage?.timestamp || 0
+                  const tb = getConversation(b.id)?.lastMessage?.timestamp || 0
+                  return tb - ta
+                })
+                return sorted.map((contact) => (
                 <ContactItem
                   key={contact.id}
                   contact={contact}
@@ -1065,13 +1327,27 @@ export default function ConversationPanel() {
                   lastMessageTime={getLastMessageTime(contact)}
                   unreadCount={getUnreadCount(contact)}
                   isActive={activeContact?.id === contact.id}
-                  onClick={() => setActiveContact(contact)}
+                  onClick={() => openConversation(contact)}
+                  presenceData={chatPresenceMap.get(contact.phone)}
+                  onDelete={(contact) => {
+                    setContactToDelete(contact)
+                    setShowDeleteConfirm(true)
+                  }}
+                  onArchive={archiveConversation}
                 />
-              ))}
+              ))
+              })()}
             </TabsContent>
 
             <TabsContent value="whatsapp" className="m-0">
-              {filteredContacts.map((contact) => (
+              {(() => {
+                const dedup = Array.from(new Map(filteredContacts.map(c => [c.id, c])).values())
+                const sorted = dedup.sort((a, b) => {
+                  const ta = getConversation(a.id)?.lastMessage?.timestamp || 0
+                  const tb = getConversation(b.id)?.lastMessage?.timestamp || 0
+                  return tb - ta
+                })
+                return sorted.map((contact) => (
                 <ContactItem
                   key={contact.id}
                   contact={contact}
@@ -1079,9 +1355,16 @@ export default function ConversationPanel() {
                   lastMessageTime={getLastMessageTime(contact)}
                   unreadCount={getUnreadCount(contact)}
                   isActive={activeContact?.id === contact.id}
-                  onClick={() => setActiveContact(contact)}
+                  onClick={() => openConversation(contact)}
+                  presenceData={chatPresenceMap.get(contact.phone)}
+                  onDelete={(contact) => {
+                    setContactToDelete(contact)
+                    setShowDeleteConfirm(true)
+                  }}
+                  onArchive={archiveConversation}
                 />
-              ))}
+              ))
+              })()}
             </TabsContent>
           </ScrollArea>
 
@@ -1143,14 +1426,11 @@ export default function ConversationPanel() {
                 )}
                 <div className="flex items-center">
                   <span className="text-xs md:text-sm text-muted-foreground mr-2 truncate">{activeContact.phone}</span>
-                  {activeContact.isOnline ? (
-                    <span className="text-xs text-green-500 flex items-center flex-shrink-0">
-                      <span className="h-2 w-2 rounded-full bg-green-500 mr-1"></span>
-                      <span className="hidden sm:inline">Online</span>
-                    </span>
-                  ) : (
-                    <span className="text-xs text-gray-500 hidden sm:inline">Offline</span>
-                  )}
+                  <WhatsAppPresenceIndicator 
+                    phone={activeContact.phone} 
+                    presenceData={chatPresenceMap.get(activeContact.phone)}
+                    className="flex-shrink-0"
+                  />
                 </div>
               </div>
             </div>
@@ -1169,28 +1449,74 @@ export default function ConversationPanel() {
 
           <ScrollArea className="flex-1 p-2 md:p-4">
             <div className="space-y-2 md:space-y-4">
-              {getConversation(activeContact.id)?.messages.map((message) => (
-                <div key={message.id} className={`flex ${message.isFromMe ? "justify-end" : "justify-start"}`}>
-                  <div
-                    className={`max-w-[85%] md:max-w-[70%] rounded-lg p-2 md:p-3 text-sm md:text-base ${
-                      message.isFromMe ? "bg-primary text-primary-foreground" : "bg-muted"
-                    }`}
-                  >
-                    <p className="break-words">{message.content}</p>
-                    <p
-                      className={`text-xs mt-1 ${
-                        message.isFromMe ? "text-primary-foreground/70" : "text-muted-foreground"
-                      }`}
-                    >
-                      {new Date(message.timestamp).toLocaleTimeString("pt-BR", {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
-                    </p>
-                  </div>
-                </div>
-              ))}
+              {(() => {
+                const conv = getConversation(activeContact.id)
+                const list = conv?.messages || []
+                const uniq = Array.from(new Map(list.map(m => [m.id, m])).values())
+                
+                // Implement lazy loading - show only recent messages
+                const displayMessages = uniq.slice(-loadedMessagesCount)
+                
+                return (
+                  <>
+                    {displayMessages.map((message) => (
+                      <div key={message.id} className={`flex ${message.isFromMe ? "justify-end" : "justify-start"}`}>
+                        <div
+                          className={`max-w-[85%] md:max-w-[70%] rounded-lg p-2 md:p-3 text-sm md:text-base ${
+                            message.isFromMe ? "bg-primary text-primary-foreground" : "bg-muted"
+                          }`}
+                        >
+                          <p className="break-words">{message.content}</p>
+                          <div className={`flex items-center justify-between mt-1 ${
+                            message.isFromMe ? "text-primary-foreground/70" : "text-muted-foreground"
+                          }`}>
+                            <p className="text-xs">
+                              {new Date(message.timestamp).toLocaleTimeString("pt-BR", {
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              })}
+                            </p>
+                            {message.isFromMe && (
+                              <WhatsAppMessageStatus 
+                                messageId={message.id}
+                                statusData={messageStatusMap.get(activeContact.phone)}
+                                className="ml-2"
+                              />
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                    
+                    {/* Load more messages button */}
+                    {uniq.length > loadedMessagesCount && (
+                      <div className="flex justify-center py-4">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={loadMoreMessages}
+                          disabled={isLoadingMessages}
+                          className="text-xs"
+                        >
+                          {isLoadingMessages ? (
+                            <>
+                              <RefreshCw className="h-3 w-3 mr-1 animate-spin" />
+                              Carregando...
+                            </>
+                          ) : (
+                            <>
+                              <RefreshCw className="h-3 w-3 mr-1" />
+                              Carregar mais mensagens
+                            </>
+                          )}
+                        </Button>
+                      </div>
+                    )}
+                  </>
+                )
+              })()}
             </div>
+            <div ref={messagesEndRef} />
           </ScrollArea>
 
           <div className="p-2 md:p-3 border-t">
@@ -1211,12 +1537,23 @@ export default function ConversationPanel() {
           </div>
         </div>
       ) : (
-        <div className="flex-1 flex items-center justify-center p-4">
-          <div className="text-center">
-            <h3 className="text-base md:text-lg font-medium mb-2">Selecione uma conversa</h3>
-            <p className="text-sm md:text-base text-muted-foreground">
-              Escolha um contato para iniciar ou continuar uma conversa
+        <div className="flex-1 flex items-center justify-center p-4 bg-gradient-to-br from-gray-50 to-white">
+          <div className="text-center max-w-md">
+            <div className="mx-auto mb-6 w-16 h-16 bg-green-100 rounded-full flex items-center justify-center">
+              <MessageSquare className="h-8 w-8 text-green-600" />
+            </div>
+            <h3 className="text-xl font-semibold text-gray-900 mb-2">Bem-vindo ao Chat UniCRM</h3>
+            <p className="text-gray-600 mb-4">
+              Selecione uma conversa ao lado ou crie uma nova para começar a atender seus clientes
             </p>
+            <Button 
+              variant="outline" 
+              onClick={() => setShowNewConversation(true)}
+              className="bg-white border-green-200 text-green-700 hover:bg-green-50"
+            >
+              <Plus className="h-4 w-4 mr-2" />
+              Nova Conversa
+            </Button>
           </div>
         </div>
       )}
@@ -1260,6 +1597,29 @@ export default function ConversationPanel() {
 
       {showConfig && <WhatsAppConfig onClose={() => setShowConfig(false)} />}
 
+      <Dialog open={showStatusMonitor} onOpenChange={setShowStatusMonitor}>
+        <DialogContent className="max-w-4xl max-h-[80vh]">
+          <DialogHeader>
+            <DialogTitle>Monitor de Status WhatsApp</DialogTitle>
+            <DialogDescription>
+              Visualize em tempo real o status de presença e mensagens dos contatos.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-4">
+            <WhatsAppStatusMonitor 
+              sse={sse}
+              presenceData={Array.from(chatPresenceMap.values())}
+              messageStatusData={Array.from(messageStatusMap.values())}
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowStatusMonitor(false)}>
+              Fechar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={showSavePresetDialog} onOpenChange={setShowSavePresetDialog}>
         <DialogContent>
           <DialogHeader>
@@ -1296,11 +1656,41 @@ export default function ConversationPanel() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Confirmar Exclusão</DialogTitle>
+            <DialogDescription>
+              Tem certeza que deseja excluir esta conversa? Esta ação não pode ser desfeita.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowDeleteConfirm(false)}>
+              Cancelar
+            </Button>
+            <Button 
+              variant="destructive" 
+              onClick={() => {
+                if (contactToDelete) {
+                  deleteConversation(contactToDelete)
+                  setShowDeleteConfirm(false)
+                  setContactToDelete(null)
+                }
+              }}
+            >
+              <Trash2 className="h-4 w-4 mr-2" />
+              Excluir
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
 
-// Contact item component
+// Enhanced Contact item component with delete/archive actions
 function ContactItem({
   contact,
   lastMessage,
@@ -1308,6 +1698,9 @@ function ContactItem({
   unreadCount,
   isActive,
   onClick,
+  presenceData,
+  onDelete,
+  onArchive,
 }: {
   contact: WhatsAppContact
   lastMessage: string
@@ -1315,33 +1708,106 @@ function ContactItem({
   unreadCount: number
   isActive: boolean
   onClick: () => void
+  presenceData?: ChatPresenceData
+  onDelete?: (contact: WhatsAppContact) => void
+  onArchive?: (contact: WhatsAppContact) => void
 }) {
   return (
-    <div className={`p-3 border-b cursor-pointer hover:bg-muted/50 ${isActive ? "bg-muted" : ""}`} onClick={onClick}>
-      <div className="flex items-center">
-        <div className="relative">
-          <Avatar className="h-10 w-10 mr-3">
-            <AvatarImage src={contact.avatar || "/placeholder.svg"} alt={contact.name} />
-            <AvatarFallback>{contact.name.substring(0, 2)}</AvatarFallback>
+    <div className={`
+      p-4 cursor-pointer transition-all duration-200 ease-in-out group
+      ${isActive 
+        ? "bg-green-50 border-l-4 border-green-500 shadow-sm" 
+        : "hover:bg-gray-50"
+      }
+      border-b border-gray-100 last:border-b-0
+    `} onClick={onClick}>
+      <div className="flex items-center gap-3">
+        {/* Enhanced Avatar */}
+        <div className="relative flex-shrink-0">
+          <Avatar className="h-12 w-12 rounded-full">
+            <AvatarImage 
+              src={contact.avatar || "/placeholder.svg"} 
+              alt={contact.name} 
+              className="object-cover"
+            />
+            <AvatarFallback className="bg-green-100 text-green-700 font-semibold">
+              {contact.name.substring(0, 2).toUpperCase()}
+            </AvatarFallback>
           </Avatar>
-          {contact.isOnline && (
-            <span className="absolute bottom-0 right-2 h-3 w-3 rounded-full bg-green-500 border-2 border-white"></span>
-          )}
+          <WhatsAppPresenceIndicator 
+            phone={contact.phone} 
+            presenceData={presenceData}
+            className="absolute -bottom-1 -right-1"
+          />
         </div>
+        
+        {/* Enhanced Contact Info */}
         <div className="flex-1 min-w-0">
-          <div className="flex justify-between items-center">
-            <h4 className="font-medium truncate">{contact.name}</h4>
-            <span className="text-xs text-muted-foreground">{lastMessageTime}</span>
+          <div className="flex justify-between items-start mb-1">
+            <h4 className={`font-semibold truncate ${
+              isActive ? "text-gray-900" : "text-gray-800"
+            }`}>
+              {contact.name}
+            </h4>
+            <span className="text-xs text-gray-500 ml-2 flex-shrink-0">
+              {lastMessageTime}
+            </span>
           </div>
-          <div className="flex justify-between items-center">
-            <p className="text-sm text-muted-foreground truncate">{lastMessage}</p>
-            {unreadCount > 0 && <Badge className="ml-2">{unreadCount}</Badge>}
+          
+          <div className="flex justify-between items-start mb-1">
+            <p className={`text-sm truncate ${
+              unreadCount > 0 
+                ? "text-gray-900 font-medium" 
+                : "text-gray-600"
+            }`}>
+              {lastMessage}
+            </p>
+            {unreadCount > 0 && (
+              <Badge className="ml-2 flex-shrink-0 bg-green-500 hover:bg-green-600 text-white text-xs font-semibold rounded-full px-2 py-0.5">
+                {unreadCount}
+              </Badge>
+            )}
           </div>
-          <div className="flex items-center mt-1">
-            <span className="text-xs text-muted-foreground">{contact.phone}</span>
-            <MessageSquare className="h-3 w-3 ml-2 text-green-500" />
+          
+          <div className="flex items-center">
+            <span className="text-xs text-gray-500">{contact.phone}</span>
+            <MessageSquare className="h-3 w-3 ml-2 text-green-500 flex-shrink-0" />
           </div>
         </div>
+        
+        {/* Action Buttons */}
+        {(onDelete || onArchive) && (
+          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            {onArchive && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6 text-gray-400 hover:text-blue-600 hover:bg-blue-50"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onArchive(contact)
+                }}
+                title="Arquivar conversa"
+              >
+                <Save className="h-3 w-3" />
+              </Button>
+            )}
+            {onDelete && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6 text-gray-400 hover:text-red-600 hover:bg-red-50"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onDelete(contact)
+                }}
+                title="Excluir conversa"
+              >
+                <Trash2 className="h-3 w-3" />
+              </Button>
+            )}
+          </div>
+        )}
       </div>
     </div>
   )

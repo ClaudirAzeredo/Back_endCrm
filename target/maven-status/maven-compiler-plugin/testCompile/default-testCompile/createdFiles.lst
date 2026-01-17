@@ -1,0 +1,4 @@
+crm\tenant\MultiTenantIsolationTests.class
+crm\controller\WhatsAppConfigControllerTest.class
+crm\controller\WhatsAppWebhookControllerTest.class
+crm\service\WhatsappServiceTest.class

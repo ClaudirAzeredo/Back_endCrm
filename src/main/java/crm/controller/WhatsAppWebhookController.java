@@ -1,7 +1,11 @@
 package crm.controller;
 
 import crm.model.MensagemRequest;
+import crm.model.ModifyChatRequest;
+import crm.model.WebhookUpdateRequest;
 import crm.dto.WhatsAppIncomingMessageDTO;
+import crm.dto.ChatPresenceDTO;
+import crm.dto.MessageStatusDTO;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import crm.service.WhatsAppMessageService;
@@ -153,6 +157,68 @@ public class WhatsAppWebhookController {
                 return ResponseEntity.ok(Map.of("success", true, "adapted", true));
             }
 
+            // Handle chat presence webhooks
+            if ("PresenceChatCallback".equalsIgnoreCase(String.valueOf(body.get("type")))) {
+                log.info("[WEBHOOK] Chat presence received: {}", body);
+                ChatPresenceDTO presence = new ChatPresenceDTO();
+                presence.setType(String.valueOf(body.get("type")));
+                presence.setPhone(String.valueOf(body.get("phone")));
+                presence.setStatus(String.valueOf(body.get("status")));
+                Object lastSeen = body.get("lastSeen");
+                if (lastSeen instanceof Number) {
+                    presence.setLastSeen(((Number) lastSeen).longValue());
+                }
+                presence.setInstanceId(String.valueOf(body.get("instanceId")));
+                
+                String clientKey = resolveClientKey();
+                Map<String, Object> payload = Map.of(
+                    "type", "chat_presence",
+                    "phone", presence.getPhone(),
+                    "status", presence.getStatus(),
+                    "lastSeen", presence.getLastSeen(),
+                    "instanceId", presence.getInstanceId()
+                );
+                sseService.publish(clientKey, payload);
+                
+                return ResponseEntity.ok(Map.of("success", true, "type", "chat_presence"));
+            }
+
+            // Handle message status webhooks
+            if ("MessageStatusCallback".equalsIgnoreCase(String.valueOf(body.get("type")))) {
+                log.info("[WEBHOOK] Message status received: {}", body);
+                MessageStatusDTO status = new MessageStatusDTO();
+                status.setType(String.valueOf(body.get("type")));
+                status.setInstanceId(String.valueOf(body.get("instanceId")));
+                status.setStatus(String.valueOf(body.get("status")));
+                status.setPhone(String.valueOf(body.get("phone")));
+                status.setPhoneDevice(body.get("phoneDevice") instanceof Number ? ((Number) body.get("phoneDevice")).intValue() : 0);
+                status.setIsGroup(Boolean.TRUE.equals(body.get("isGroup")));
+                
+                Object momment = body.get("momment");
+                if (momment instanceof Number) {
+                    status.setMomment(((Number) momment).longValue());
+                }
+                
+                Object ids = body.get("ids");
+                if (ids instanceof java.util.List) {
+                    java.util.List<?> idsList = (java.util.List<?>) ids;
+                    status.setIds(idsList.stream().map(String::valueOf).toArray(String[]::new));
+                }
+                
+                String clientKey = resolveClientKey();
+                Map<String, Object> payload = Map.of(
+                    "type", "message_status",
+                    "phone", status.getPhone(),
+                    "status", status.getStatus(),
+                    "ids", status.getIds(),
+                    "instanceId", status.getInstanceId(),
+                    "isGroup", status.getIsGroup()
+                );
+                sseService.publish(clientKey, payload);
+                
+                return ResponseEntity.ok(Map.of("success", true, "type", "message_status"));
+            }
+
             // Unsupported/unknown type: accept to avoid retries but mark ignored
             return ResponseEntity.ok(Map.of("success", true, "ignored", true));
         } catch (Exception e) {
@@ -163,8 +229,7 @@ public class WhatsAppWebhookController {
 
     @GetMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter stream(@RequestParam(value = "clientKey", required = false) String clientKey) {
-        String key = clientKey != null && !clientKey.isBlank() ? clientKey : resolveClientKey();
-        return sseService.subscribe(key);
+        throw new org.springframework.web.server.ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Temporariamente indisponível");
     }
 
     @GetMapping("/webhook/debug-last")
@@ -570,8 +635,13 @@ public class WhatsAppWebhookController {
 
     @GetMapping("/contacts")
     public ResponseEntity<Map<String, Object>> listContacts() {
-        List<crm.entity.WhatsAppContact> contacts = contactService.list();
-        return ResponseEntity.ok(Map.of("contacts", contacts));
+        try {
+            List<crm.entity.WhatsAppContact> contacts = contactService.list();
+            return ResponseEntity.ok(Map.of("contacts", contacts));
+        } catch (Exception e) {
+            log.warn("[CONTACTS] Falha ao listar contatos: {}", e.toString());
+            return ResponseEntity.ok(Map.of("contacts", java.util.Collections.emptyList(), "error", "db_unavailable"));
+        }
     }
 
     @PostMapping("/contact")
@@ -583,6 +653,118 @@ public class WhatsAppWebhookController {
         }
         crm.entity.WhatsAppContact saved = contactService.upsert(phone, name, null);
         return ResponseEntity.ok(Map.of("success", true, "contact", saved));
+    }
+
+    // Novos endpoints para funcionalidades WhatsApp
+    @PostMapping("/modify-chat")
+    public ResponseEntity<?> modifyChat(@RequestBody ModifyChatRequest request) {
+        try {
+            if (request.getPhone() == null || request.getPhone().isBlank()) {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                        .body(Map.of("success", false, "error", "Phone é obrigatório"));
+            }
+            if (request.getAction() == null || request.getAction().isBlank()) {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                        .body(Map.of("success", false, "error", "Action é obrigatório"));
+            }
+            
+            // Validar action
+            if (!"read".equals(request.getAction()) && !"unread".equals(request.getAction()) && !"delete".equals(request.getAction())) {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                        .body(Map.of("success", false, "error", "Action deve ser 'read', 'unread' ou 'delete'"));
+            }
+
+            boolean success = whatsappService.modifyChat(request.getPhone(), request.getAction());
+            try { contactService.upsert(request.getPhone(), null, null); } catch (Exception ignored) {}
+            return ResponseEntity.ok(Map.of("success", success, "value", success));
+        } catch (Exception e) {
+            log.error("Erro ao modificar chat: {}", e.getMessage(), e);
+            return ResponseEntity.ok(Map.of("success", false, "error", e.getMessage()));
+        }
+    }
+
+    @PutMapping("/update-webhook-chat-presence")
+    public ResponseEntity<?> updateWebhookChatPresence(@RequestBody WebhookUpdateRequest request) {
+        try {
+            if (request.getValue() == null || request.getValue().isBlank()) {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                        .body(Map.of("success", false, "error", "Webhook URL é obrigatória"));
+            }
+
+            boolean success = whatsappService.updateWebhookChatPresence(request.getValue());
+            return ResponseEntity.ok(Map.of("success", success));
+        } catch (Exception e) {
+            log.error("Erro ao atualizar webhook de presença: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("success", false, "error", e.getMessage()));
+        }
+    }
+
+    @PutMapping("/update-webhook-message-status")
+    public ResponseEntity<?> updateWebhookMessageStatus(@RequestBody WebhookUpdateRequest request) {
+        try {
+            if (request.getValue() == null || request.getValue().isBlank()) {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                        .body(Map.of("success", false, "error", "Webhook URL é obrigatória"));
+            }
+
+            boolean success = whatsappService.updateWebhookMessageStatus(request.getValue());
+            return ResponseEntity.ok(Map.of("success", success));
+        } catch (Exception e) {
+            log.error("Erro ao atualizar webhook de status: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("success", false, "error", e.getMessage()));
+        }
+    }
+
+    // Webhook handlers para status de chat e mensagens
+    @PostMapping("/webhook/chat-presence")
+    public ResponseEntity<?> handleChatPresenceWebhook(@RequestBody ChatPresenceDTO presence) {
+        try {
+            log.info("[WEBHOOK CHAT PRESENCE] phone={}, status={}, type={}", 
+                    presence.getPhone(), presence.getStatus(), presence.getType());
+            
+            // Publicar evento via SSE para atualização em tempo real
+            String clientKey = resolveClientKey();
+            Map<String, Object> payload = Map.of(
+                "type", "chat_presence",
+                "phone", presence.getPhone(),
+                "status", presence.getStatus(),
+                "lastSeen", presence.getLastSeen(),
+                "instanceId", presence.getInstanceId()
+            );
+            sseService.publish(clientKey, payload);
+            
+            return ResponseEntity.ok(Map.of("success", true));
+        } catch (Exception e) {
+            log.error("Erro ao processar webhook de presença: {}", e.getMessage(), e);
+            return ResponseEntity.ok(Map.of("success", false, "error", e.getMessage()));
+        }
+    }
+
+    @PostMapping("/webhook/message-status")
+    public ResponseEntity<?> handleMessageStatusWebhook(@RequestBody MessageStatusDTO status) {
+        try {
+            log.info("[WEBHOOK MESSAGE STATUS] phone={}, status={}, ids={}, type={}", 
+                    status.getPhone(), status.getStatus(), status.getIds(), status.getType());
+            
+            // Publicar evento via SSE para atualização em tempo real
+            String clientKey = resolveClientKey();
+            Map<String, Object> payload = Map.of(
+                "type", "message_status",
+                "phone", status.getPhone(),
+                "status", status.getStatus(),
+                "ids", status.getIds(),
+                "instanceId", status.getInstanceId(),
+                "isGroup", status.getIsGroup()
+            );
+            sseService.publish(clientKey, payload);
+            
+            return ResponseEntity.ok(Map.of("success", true));
+        } catch (Exception e) {
+            log.error("Erro ao processar webhook de status: {}", e.getMessage(), e);
+            return ResponseEntity.ok(Map.of("success", false, "error", e.getMessage()));
+        }
     }
     private WhatsAppIncomingMessageDTO mapToDto(Map<String, Object> payload) {
         WhatsAppIncomingMessageDTO dto = new WhatsAppIncomingMessageDTO();

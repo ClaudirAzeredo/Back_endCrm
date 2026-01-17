@@ -878,9 +878,26 @@ function ActionEditor({
   const [actionData, setActionData] = useState<Record<string, any>>(action || {})
 
   const handleSave = () => {
+    let variables: Record<string, string> | undefined
+    if (typeof actionData.variablesText === "string" && actionData.variablesText.trim()) {
+      try { variables = JSON.parse(actionData.variablesText) } catch { variables = undefined }
+    }
+    let customRecipients: string[] | undefined
+    if (actionData.recipients === "custom" && typeof actionData.customRecipientsText === "string") {
+      customRecipients = actionData.customRecipientsText
+        .split(/[,;\s]+/)
+        .map((s: string) => s.replace(/[^0-9]/g, ""))
+        .filter((s: string) => s.length > 0)
+    }
+    const base: any = { ...actionData }
+    if (variables) base.variables = variables
+    if (customRecipients) base.customRecipients = customRecipients
+    delete base.variablesText
+    delete base.customRecipientsText
+
     const newAction: AutomationAction = {
       type: actionType as any,
-      ...actionData,
+      ...base,
     }
     onSave(newAction)
   }
@@ -937,6 +954,24 @@ function ActionEditor({
                     <SelectItem value="custom">Personalizado</SelectItem>
                   </SelectContent>
                 </Select>
+              </div>
+              {actionData.recipients === "custom" && (
+                <div>
+                  <Label>Números (separados por vírgula)</Label>
+                  <Input
+                    value={actionData.customRecipientsText || ""}
+                    onChange={(e) => setActionData({ ...actionData, customRecipientsText: e.target.value })}
+                    placeholder="5541999999999, 5511999999999"
+                  />
+                </div>
+              )}
+              <div>
+                <Label>Variáveis do Template (JSON)</Label>
+                <Input
+                  value={actionData.variablesText || ""}
+                  onChange={(e) => setActionData({ ...actionData, variablesText: e.target.value })}
+                  placeholder='{"client_name":"Marcio"}'
+                />
               </div>
             </>
           )}

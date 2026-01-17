@@ -67,6 +67,20 @@ public class SecurityConfig {
                         .requestMatchers("/api/whatsapp/webhook").permitAll()
                         .requestMatchers("/whatsapp/webhook").permitAll()
 
+                        // WhatsApp read-only endpoints (dev convenience)
+                        .requestMatchers("/api/whatsapp/conversations").permitAll()
+                        .requestMatchers("/api/whatsapp/contacts").permitAll()
+                        .requestMatchers("/api/whatsapp/messages/**").permitAll()
+                        .requestMatchers("/whatsapp/conversations").permitAll()
+                        .requestMatchers("/whatsapp/contacts").permitAll()
+                        .requestMatchers("/whatsapp/messages/**").permitAll()
+
+                        // WhatsApp basic actions (dev)
+                        .requestMatchers("/api/whatsapp/send-message").permitAll()
+                        .requestMatchers("/api/whatsapp/modify-chat").permitAll()
+                        .requestMatchers("/whatsapp/send-message").permitAll()
+                        .requestMatchers("/whatsapp/modify-chat").permitAll()
+
                         // Other WhatsApp endpoints require auth
                         .requestMatchers("/api/whatsapp/**").authenticated()
 
