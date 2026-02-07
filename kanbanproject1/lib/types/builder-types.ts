@@ -52,5 +52,12 @@ export const COMPONENT_DEFINITIONS: {
   { type: 'video', label: 'Vídeo', icon: 'Play' },
   { type: 'form', label: 'Formulário', icon: 'FileText' },
   { type: 'spacer', label: 'Espaço', icon: 'Minus' },
-  { type: 'code', label: 'Código', icon: 'Code' },
+  { 
+    type: 'code', 
+    label: 'Código', 
+    icon: 'Code',
+    defaultContent: {
+      html: '<div>\n  <!-- Insira seu código HTML/Embed aqui -->\n</div>'
+    }
+  },
 ];

@@ -108,6 +108,7 @@ export default function LandingPagesDashboard() {
           funnelId: selectedPage.funnelId,
           stageId: selectedPage.stageId
         }}
+        landingPageId={selectedPage.id}
         onSave={(elements, settings) => handleSave({
           name: selectedPage.name,
           elements,

@@ -37,7 +37,15 @@ export default function LandingPagePublic() {
   }, [id])
 
   const isLegacyElements = (elements: unknown): elements is LandingPageElement[] => {
-    return Array.isArray(elements) && elements.length > 0 && typeof (elements as any)[0]?.order === "number"
+    if (!Array.isArray(elements) || elements.length === 0) return false
+    const first = elements[0] as any
+    
+    // Se tiver children ou for um tipo novo, não é legado
+    if (first.children || ['section', 'columns', 'column', 'paragraph', 'video', 'spacer', 'code'].includes(first.type)) {
+      return false
+    }
+
+    return typeof first.order === "number"
   }
 
   const getBuilderFormFields = (formElement: BuilderElement): any[] => {

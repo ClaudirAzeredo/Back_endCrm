@@ -29,9 +29,10 @@ interface BuilderHeaderProps {
   onSave?: (elements: BuilderElement[], settings?: PageSettings) => void;
   onClose?: () => void;
   initialSettings?: PageSettings;
+  landingPageId?: string;
 }
 
-export function BuilderHeader({ elements, setElements, onSave, onClose, initialSettings }: BuilderHeaderProps) {
+export function BuilderHeader({ elements, setElements, onSave, onClose, initialSettings, landingPageId }: BuilderHeaderProps) {
   const [showTemplates, setShowTemplates] = useState(false);
   const { toast } = useToast();
   
@@ -160,14 +161,19 @@ export function BuilderHeader({ elements, setElements, onSave, onClose, initialS
             Voltar
           </Button>
         )}
-        <Button variant="outline" size="sm" onClick={handleSave}>
+        <Button size="sm" onClick={handleSave}>
           <Save className="w-4 h-4 mr-2" />
           Salvar
         </Button>
-        <Button size="sm">
-          <Eye className="w-4 h-4 mr-2" />
-          Visualizar
-        </Button>
+        {landingPageId && (
+          <Button 
+            size="sm" 
+            onClick={() => window.open(`${window.location.origin}/lp/${landingPageId}`, '_blank')}
+          >
+            <Eye className="w-4 h-4 mr-2" />
+            Visualizar
+          </Button>
+        )}
       </div>
 
       <TemplatesDialog 

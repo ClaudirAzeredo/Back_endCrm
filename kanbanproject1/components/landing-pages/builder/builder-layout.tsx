@@ -24,9 +24,10 @@ interface BuilderLayoutProps {
   onSave?: (elements: BuilderElement[], settings?: PageSettings) => void;
   onClose?: () => void;
   initialSettings?: PageSettings;
+  landingPageId?: string;
 }
 
-export function BuilderLayout({ initialElements, onSave, onClose, initialSettings }: BuilderLayoutProps) {
+export function BuilderLayout({ initialElements, onSave, onClose, initialSettings, landingPageId }: BuilderLayoutProps) {
   const {
     elements,
     selectedId,
@@ -170,6 +171,7 @@ export function BuilderLayout({ initialElements, onSave, onClose, initialSetting
           onSave={onSave}
           onClose={onClose}
           initialSettings={initialSettings}
+          landingPageId={landingPageId}
         />
         
         <div className="flex-1 flex overflow-hidden">
