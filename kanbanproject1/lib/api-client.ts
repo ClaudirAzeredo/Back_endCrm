@@ -86,13 +86,19 @@ class ApiClient {
       if (!response.ok) {
         let errorData
         try {
-          errorData = await response.json()
+          const text = await response.text()
+          try {
+            errorData = JSON.parse(text)
+          } catch {
+            errorData = { message: text || response.statusText }
+          }
         } catch {
           errorData = { message: response.statusText }
         }
 
         // Handle 401 Unauthorized - redirect to login
-        if (response.status === 401) {
+        // Skip redirect for login endpoint itself to avoid loops or confusing messages
+        if (response.status === 401 && !url.includes("/auth/login")) {
           console.error("[v0] 401 Unauthorized - clearing token and redirecting to login")
           this.token = null
           localStorage.removeItem("unicrm_access_token")
@@ -105,7 +111,14 @@ class ApiClient {
           throw new ApiError("Sessão expirada. Por favor, faça login novamente.", 401, errorData)
         }
 
-        throw new ApiError(errorData.error || errorData.message || "Request failed", response.status, errorData)
+        const errorMessage = errorData.message || errorData.error || `Request failed with status ${response.status}`
+        const detailedMessage = errorData.exception ? `${errorMessage} \nException: ${errorData.exception}` : errorMessage
+
+        throw new ApiError(
+          detailedMessage,
+          response.status,
+          errorData,
+        )
       }
 
       // Handle 204 No Content

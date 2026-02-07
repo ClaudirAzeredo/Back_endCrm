@@ -1,12 +1,12 @@
 package crm.controller;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import crm.service.WhatsAppConfigService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.*;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.client.HttpStatusCodeException;
@@ -16,7 +16,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.TimeUnit;
 
 @RestController
 @RequestMapping({"/whatsapp", "/api/whatsapp"})
@@ -26,8 +25,6 @@ public class WhatsAppConfigController {
     private WhatsAppConfigService service;
 
     private static final Logger log = LoggerFactory.getLogger(WhatsAppConfigController.class);
-
-    private static final String API_BASE = "https://api.z-api.io/instances";
 
     @GetMapping("/config")
     public ResponseEntity<?> getConfig() {
@@ -147,8 +144,8 @@ public class WhatsAppConfigController {
             RestTemplate rt = service.getRestTemplate();
 
             try {
-                ResponseEntity<Map> resp = rt.exchange(url, HttpMethod.GET, entity, Map.class);
-                Map body = resp.getBody() != null ? resp.getBody() : java.util.Collections.emptyMap();
+                ResponseEntity<Map<String, Object>> resp = rt.exchange(url, HttpMethod.GET, entity, new ParameterizedTypeReference<Map<String, Object>>() {});
+                Map<String, Object> body = resp.getBody() != null ? resp.getBody() : java.util.Collections.emptyMap();
                 boolean smartphoneConnected = Boolean.parseBoolean(String.valueOf(body.getOrDefault("smartphoneConnected", body.getOrDefault("connected", false))));
                 Object stObj = body.get("status");
                 String st = stObj != null ? String.valueOf(stObj) : null;
@@ -634,7 +631,7 @@ public class WhatsAppConfigController {
             RestTemplate restTemplate = service.getRestTemplate();
 
             String url = baseUrl + "/token/" + instanceToken + "/restart";
-            ResponseEntity<Map> response = restTemplate.exchange(url, HttpMethod.PUT, entity, Map.class);
+            ResponseEntity<Map<String, Object>> response = restTemplate.exchange(url, HttpMethod.PUT, entity, new ParameterizedTypeReference<Map<String, Object>>() {});
 
             if (response.getStatusCode().is2xxSuccessful()) {
                 return ResponseEntity.ok(Map.of(
@@ -653,20 +650,5 @@ public class WhatsAppConfigController {
                 "success", false
             ));
         }
-    }
-
-    // Helper getters (if needed elsewhere)
-    private String getCurrentInstanceId() {
-        return service.getCurrentCompanyConfig()
-                .map(c -> c.getInstanceId())
-                .orElseThrow(() -> new RuntimeException("WhatsApp configuration not found"));
-    }
-
-    private String getCurrentToken() {
-        return service.getInstanceToken();
-    }
-
-    private String getClientToken() {
-        return service.getApiKey();
     }
 }

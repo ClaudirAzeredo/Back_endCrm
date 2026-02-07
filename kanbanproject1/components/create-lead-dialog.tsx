@@ -29,8 +29,8 @@ import {
 } from "lucide-react"
 import TagInput from "./tag-input"
 import { usersApi } from "@/lib/api/users-api"
-import { loadFromStorage } from "@/lib/storage"
 import { authApi } from "@/lib/api/auth-api"
+import { useApiTags } from "@/hooks/use-api-tags"
 
 type Person = {
   id: string
@@ -249,7 +249,7 @@ export default function CreateLeadDialog({ open, people, columns, onClose, onCre
   const validateForm = () => {
     const newErrors: Record<string, string> = {}
 
-    const principalContacts = contacts.filter((c) => c.isPrincipal && c.name.trim() && c.phone.trim())
+    const principalContacts = contacts.filter((c) => c.isPrincipal && c.name.trim() && c.phone?.trim())
 
     if (principalContacts.length === 0) {
       newErrors.contacts = "É necessário ter pelo menos um contato principal com nome e telefone"
@@ -374,9 +374,17 @@ export default function CreateLeadDialog({ open, people, columns, onClose, onCre
   const selectedSource = sources.find((s) => s.value === formData.source)
   const selectedColumn = columns.find((c) => c.id === formData.status)
   const selectedPerson = availableResponsibles.find((p) => p.id === formData.assignedTo)
-  const availableTags = loadFromStorage("tags", [])
+  
+  const { tags: availableTags, fetchTags } = useApiTags()
+
+  useEffect(() => {
+    if (open) {
+      fetchTags()
+    }
+  }, [open, fetchTags])
+
   const selectedTags = Array.isArray(availableTags)
-    ? availableTags.filter((tag: any) => formData.tags.includes(tag.id))
+    ? availableTags.filter((tag) => formData.tags.includes(tag.id))
     : []
 
   return (

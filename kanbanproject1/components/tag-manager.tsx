@@ -8,16 +8,12 @@ import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { useToast } from "@/hooks/use-toast"
-import { Plus, Trash2, Edit2, Save, X, Tag } from "lucide-react"
-import { loadFromStorage, saveToStorage } from "@/lib/storage"
+import { Plus, Trash2, Edit2, Save, X, Tag as TagIcon } from "lucide-react"
+import { useApiTags } from "@/hooks/use-api-tags"
+import type { Tag } from "@/lib/api/tags-api"
 
-export type TagType = {
-  id: string
-  name: string
-  color: string
-  description?: string
-  createdAt: string
-}
+export type { Tag } from "@/lib/api/tags-api"
+export type TagType = Tag
 
 type TagManagerProps = {
   open: boolean
@@ -45,7 +41,7 @@ const predefinedColors = [
 
 export default function TagManager({ open, onClose }: TagManagerProps) {
   const { toast } = useToast()
-  const [tags, setTags] = useState<TagType[]>([])
+  const { tags, fetchTags, createTag, updateTag, deleteTag } = useApiTags()
   const [isCreating, setIsCreating] = useState(false)
   const [editingTag, setEditingTag] = useState<string | null>(null)
   const [newTag, setNewTag] = useState({
@@ -56,21 +52,11 @@ export default function TagManager({ open, onClose }: TagManagerProps) {
 
   useEffect(() => {
     if (open) {
-      loadTags()
+      fetchTags()
     }
-  }, [open])
+  }, [open, fetchTags])
 
-  const loadTags = () => {
-    const storedTags = loadFromStorage("tags", [])
-    setTags(Array.isArray(storedTags) ? storedTags : [])
-  }
-
-  const saveTags = (updatedTags: TagType[]) => {
-    setTags(updatedTags)
-    saveToStorage(updatedTags, "tags")
-  }
-
-  const handleCreateTag = () => {
+  const handleCreateTag = async () => {
     if (!newTag.name.trim()) {
       toast({
         title: "Erro",
@@ -80,58 +66,36 @@ export default function TagManager({ open, onClose }: TagManagerProps) {
       return
     }
 
-    // Check if tag name already exists
-    if (tags.some((tag) => tag.name.toLowerCase() === newTag.name.toLowerCase())) {
-      toast({
-        title: "Erro",
-        description: "Já existe uma tag com este nome",
-        variant: "destructive",
+    try {
+      await createTag({
+        name: newTag.name.trim(),
+        color: newTag.color,
+        description: newTag.description.trim() || undefined,
       })
-      return
+
+      setNewTag({ name: "", color: predefinedColors[0], description: "" })
+      setIsCreating(false)
+    } catch (error) {
+      // Error handling is done in the hook
     }
-
-    const tag: TagType = {
-      id: `tag_${Date.now()}`,
-      name: newTag.name.trim(),
-      color: newTag.color,
-      description: newTag.description.trim() || undefined,
-      createdAt: new Date().toISOString(),
-    }
-
-    const updatedTags = [...tags, tag]
-    saveTags(updatedTags)
-
-    setNewTag({ name: "", color: predefinedColors[0], description: "" })
-    setIsCreating(false)
-
-    toast({
-      title: "Tag criada",
-      description: `A tag "${tag.name}" foi criada com sucesso`,
-    })
   }
 
-  const handleUpdateTag = (tagId: string, updates: Partial<TagType>) => {
-    const updatedTags = tags.map((tag) => (tag.id === tagId ? { ...tag, ...updates } : tag))
-    saveTags(updatedTags)
-    setEditingTag(null)
-
-    toast({
-      title: "Tag atualizada",
-      description: "A tag foi atualizada com sucesso",
-    })
+  const handleUpdateTag = async (tagId: string, updates: Partial<Tag>) => {
+    try {
+      await updateTag(tagId, updates)
+      setEditingTag(null)
+    } catch (error) {
+       // Error handling is done in the hook
+    }
   }
 
-  const handleDeleteTag = (tagId: string) => {
-    const tag = tags.find((t) => t.id === tagId)
-    if (!tag) return
-
-    const updatedTags = tags.filter((t) => t.id !== tagId)
-    saveTags(updatedTags)
-
-    toast({
-      title: "Tag excluída",
-      description: `A tag "${tag.name}" foi removida`,
-    })
+  const handleDeleteTag = async (tagId: string) => {
+    if (!confirm("Tem certeza que deseja excluir esta tag?")) return
+    try {
+      await deleteTag(tagId)
+    } catch (error) {
+       // Error handling is done in the hook
+    }
   }
 
   const handleClose = () => {
@@ -146,7 +110,7 @@ export default function TagManager({ open, onClose }: TagManagerProps) {
       <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Tag className="h-5 w-5" />
+            <TagIcon className="h-5 w-5" />
             Central de Tags
           </DialogTitle>
         </DialogHeader>
@@ -241,7 +205,7 @@ export default function TagManager({ open, onClose }: TagManagerProps) {
             <CardContent>
               {tags.length === 0 ? (
                 <div className="text-center py-8 text-muted-foreground">
-                  <Tag className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                  <TagIcon className="h-12 w-12 mx-auto mb-4 opacity-50" />
                   <p>Nenhuma tag criada ainda</p>
                   <p className="text-sm">Crie sua primeira tag para organizar seus leads</p>
                 </div>

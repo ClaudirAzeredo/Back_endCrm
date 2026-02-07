@@ -30,6 +30,27 @@ import {
 // Tipos para automações
 type AutomationTrigger = "on_enter" | "on_exit" | "on_time_spent" | "on_deadline" | "on_response" | "on_no_response"
 
+type ActionMode = "automatic" | "manual"
+
+type ActionDelay = {
+  value: number
+  unit: "minutes" | "hours" | "days"
+}
+
+type FlowTarget =
+  | { kind: "action"; actionId: string }
+  | { kind: "stage"; columnId: string }
+  | null
+
+type ActionMeta = {
+  id?: string
+  mode?: ActionMode
+  enabled?: boolean
+  customName?: string
+  delayConfig?: ActionDelay
+  next?: FlowTarget
+}
+
 type ConditionalAction = {
   condition: "response_received" | "no_response" | "time_elapsed"
   timeLimit?: number
@@ -107,13 +128,14 @@ type BatchTransferAction = {
 }
 
 type AutomationAction =
-  | WhatsAppAction
-  | TaskAction
-  | EmailAction
-  | NotificationAction
-  | MoveLeadAction
-  | TransferCommandAction
-  | BatchTransferAction
+  | (WhatsAppAction & ActionMeta)
+  | (TaskAction & ActionMeta)
+  | (EmailAction & ActionMeta)
+  | (NotificationAction & ActionMeta)
+  | (MoveLeadAction & ActionMeta)
+  | (TransferCommandAction & ActionMeta)
+  | (BatchTransferAction & ActionMeta)
+  | ({ type: "manual" } & ActionMeta)
 
 type Automation = {
   id: string
@@ -386,6 +408,9 @@ function AutomationCard({
   }
 
   const getActionDescription = (action: AutomationAction) => {
+    if (action.customName) {
+      return action.customName
+    }
     switch (action.type) {
       case "whatsapp":
         const recipientText =
@@ -463,14 +488,63 @@ function AutomationCard({
               </div>
             )}
 
-            <div className="flex flex-wrap gap-1">
-              {automation.actions.map((action, index) => (
-                <Badge key={index} variant="outline" className="flex items-center gap-1">
-                  {getActionIcon(action.type)}
-                  <span>{getActionDescription(action)}</span>
-                </Badge>
-              ))}
-            </div>
+            {(() => {
+              const normalized = (automation.actions || []).map((a: any, idx: number) => ({
+                ...a,
+                id: a.id || `legacy_${idx}`,
+                mode: a.mode || (a.type === "manual" ? "manual" : "automatic"),
+                enabled: typeof a.enabled === "boolean" ? a.enabled : true,
+                next: a.next ?? null,
+              }))
+              const manualActions = normalized.filter((a: any) => a.enabled && (a.mode || "automatic") === "manual")
+              const autoActions = normalized.filter((a: any) => a.enabled && (a.mode || "automatic") === "automatic" && a.type !== "manual")
+              const byId = new Map<string, any>()
+              normalized.forEach((a: any) => byId.set(a.id, a))
+              const nextLabel = (a: any) => {
+                if (!a.next) return "Encerrar"
+                if (a.next.kind === "stage") return `Etapa: ${getColumnName(a.next.columnId)}`
+                const target = byId.get(a.next.actionId)
+                return target ? `Ação: ${target.type}` : "Ação: (removida)"
+              }
+
+              return (
+                <div className="space-y-2">
+                  {autoActions.length > 0 && (
+                    <div className="space-y-1">
+                      <div className="text-xs font-medium text-muted-foreground">Fluxo automático</div>
+                      <div className="space-y-1">
+                        {autoActions.map((a: any) => (
+                          <div key={a.id} className="flex flex-wrap items-center gap-2">
+                            <Badge variant="outline" className="flex items-center gap-1">
+                              {getActionIcon(a.type)}
+                              <span>{getActionDescription(a)}</span>
+                            </Badge>
+                            <ArrowRight className="h-3 w-3 text-muted-foreground" />
+                            <Badge variant="secondary" className="text-xs">
+                              {nextLabel(a)}
+                            </Badge>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {manualActions.length > 0 && (
+                    <div className="space-y-1">
+                      <div className="text-xs font-medium text-muted-foreground">Ações manuais (sem setas)</div>
+                      <div className="flex flex-wrap gap-1">
+                        {manualActions.map((a: any) => (
+                          <Badge key={a.id} variant="outline" className="flex items-center gap-1">
+                            {getActionIcon(a.type)}
+                            <span>{getActionDescription(a)}</span>
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )
+            })()}
           </div>
 
           <div className="flex items-center gap-1">
@@ -511,14 +585,21 @@ function AutomationEditor({
   const hasWhatsAppAction = localAutomation.actions.some((action) => action.type === "whatsapp")
 
   const addAction = (action: AutomationAction) => {
+    const withMeta: AutomationAction = {
+      enabled: true,
+      mode: "automatic",
+      id: (action as any).id || `act_${Date.now()}`,
+      ...(action as any),
+    }
+
     if (editingActionIndex !== null) {
       const newActions = [...localAutomation.actions]
-      newActions[editingActionIndex] = action
+      newActions[editingActionIndex] = withMeta
       setLocalAutomation({ ...localAutomation, actions: newActions })
     } else {
       setLocalAutomation({
         ...localAutomation,
-        actions: [...localAutomation.actions, action],
+        actions: [...localAutomation.actions, withMeta],
       })
     }
     setShowActionDialog(false)
@@ -743,7 +824,7 @@ function AutomationEditor({
 
           <div>
             <div className="flex justify-between items-center mb-4">
-              <Label>Ações Iniciais</Label>
+              <Label>Ações da Etapa</Label>
               <Button onClick={() => setShowActionDialog(true)} size="sm">
                 <Plus className="h-4 w-4 mr-2" />
                 Adicionar Ação
@@ -779,6 +860,7 @@ function AutomationEditor({
           <ActionEditor
             action={editingActionIndex !== null ? localAutomation.actions[editingActionIndex] : null}
             columns={columns}
+            availableActions={localAutomation.actions}
             onSave={addAction}
             onClose={() => {
               setShowActionDialog(false)
@@ -838,6 +920,8 @@ function ActionCard({
         return "Transferir lead"
       case "batch_transfer":
         return "Transferência em lote"
+      case "manual":
+        return "Ação manual (pausa o fluxo)"
       default:
         return "Ação desconhecida"
     }
@@ -866,11 +950,13 @@ function ActionCard({
 function ActionEditor({
   action,
   columns,
+  availableActions,
   onSave,
   onClose,
 }: {
   action: AutomationAction | null
   columns: Array<{ id: string; name: string; color: string }>
+  availableActions: AutomationAction[]
   onSave: (action: AutomationAction) => void
   onClose: () => void
 }) {
@@ -896,9 +982,14 @@ function ActionEditor({
     delete base.customRecipientsText
 
     const newAction: AutomationAction = {
+      id: actionData.id || `act_${Date.now()}`,
+      enabled: typeof actionData.enabled === "boolean" ? actionData.enabled : true,
+      mode: (actionData.mode as ActionMode) || (actionType === "manual" ? "manual" : "automatic"),
+      delayConfig: actionData.delayConfig,
+      next: actionData.next,
       type: actionType as any,
       ...base,
-    }
+    } as any
     onSave(newAction)
   }
 
@@ -924,9 +1015,132 @@ function ActionEditor({
                 <SelectItem value="move_lead">Mover Lead</SelectItem>
                 <SelectItem value="transfer_command">Transferir Lead</SelectItem>
                 <SelectItem value="batch_transfer">Disparo Automático em Lote</SelectItem>
+                <SelectItem value="manual">Manual</SelectItem>
               </SelectContent>
             </Select>
           </div>
+
+          <div>
+            <Label>Nome da Ação (Opcional)</Label>
+            <Input
+              value={actionData.customName || ""}
+              onChange={(e) => setActionData({ ...actionData, customName: e.target.value })}
+              placeholder="Ex: Envio de Saudação"
+            />
+          </div>
+
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <Label>Modo</Label>
+              <Select
+                value={actionData.mode || (actionType === "manual" ? "manual" : "automatic")}
+                onValueChange={(value) => setActionData({ ...actionData, mode: value })}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="automatic">Automática</SelectItem>
+                  <SelectItem value="manual">Manual</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div>
+              <Label>Delay</Label>
+              <div className="flex gap-2">
+                <Input
+                  type="number"
+                  value={actionData.delayConfig?.value ?? ""}
+                  onChange={(e) =>
+                    setActionData({
+                      ...actionData,
+                      delayConfig: {
+                        value: e.target.value ? Number(e.target.value) : 0,
+                        unit: actionData.delayConfig?.unit || "minutes",
+                      },
+                    })
+                  }
+                  placeholder="0"
+                />
+                <Select
+                  value={actionData.delayConfig?.unit || "minutes"}
+                  onValueChange={(unit) =>
+                    setActionData({
+                      ...actionData,
+                      delayConfig: {
+                        value: actionData.delayConfig?.value || 0,
+                        unit,
+                      },
+                    })
+                  }
+                >
+                  <SelectTrigger className="w-[140px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="minutes">Minutos</SelectItem>
+                    <SelectItem value="hours">Horas</SelectItem>
+                    <SelectItem value="days">Dias</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div>
+              <Label>Habilitada</Label>
+              <div className="h-10 flex items-center">
+                <Switch checked={actionData.enabled ?? true} onCheckedChange={(enabled) => setActionData({ ...actionData, enabled })} />
+              </div>
+            </div>
+          </div>
+
+          {(actionData.mode || (actionType === "manual" ? "manual" : "automatic")) === "automatic" && actionType !== "manual" && (
+            <div className="space-y-2">
+              <Label>Próximo no fluxo automático</Label>
+              <Select
+                value={
+                  actionData.next?.kind === "action"
+                    ? `action:${actionData.next.actionId}`
+                    : actionData.next?.kind === "stage"
+                      ? `stage:${actionData.next.columnId}`
+                      : "none"
+                }
+                onValueChange={(value) => {
+                  if (value === "none") {
+                    setActionData({ ...actionData, next: null })
+                    return
+                  }
+                  const [kind, id] = value.split(":")
+                  if (kind === "action") {
+                    setActionData({ ...actionData, next: { kind: "action", actionId: id } })
+                  } else {
+                    setActionData({ ...actionData, next: { kind: "stage", columnId: id } })
+                  }
+                }}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Definir próximo..." />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Encerrar fluxo</SelectItem>
+                  {availableActions
+                    .filter((a) => a.id && a.id !== actionData.id && (a.mode || "automatic") === "automatic" && a.type !== "manual")
+                    .map((a) => (
+                      <SelectItem key={a.id} value={`action:${a.id}`}>
+                        Próxima ação: {a.type}
+                      </SelectItem>
+                    ))}
+                  {columns.map((c) => (
+                    <SelectItem key={c.id} value={`stage:${c.id}`}>
+                      Mover para etapa: {c.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">Esse vínculo desenha a seta e controla a execução do fluxo.</p>
+            </div>
+          )}
 
           {actionType === "whatsapp" && (
             <>

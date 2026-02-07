@@ -21,6 +21,7 @@ public class LeadContact {
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "lead_id", nullable = false)
+    @com.fasterxml.jackson.annotation.JsonIgnore
     private Lead lead;
 
     @Column(nullable = false)

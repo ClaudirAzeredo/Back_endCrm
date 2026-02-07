@@ -6,13 +6,8 @@ import { useState, useRef, useEffect } from "react"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { X, Plus } from "lucide-react"
-import { loadFromStorage, saveToStorage } from "@/lib/storage"
-
-type Tag = {
-  id: string
-  name: string
-  color: string
-}
+import { useApiTags } from "@/hooks/use-api-tags"
+import { Tag } from "@/lib/api/tags-api"
 
 type TagInputProps = {
   selectedTags: string[]
@@ -28,13 +23,13 @@ export default function TagInput({
   const [inputValue, setInputValue] = useState("")
   const [suggestions, setSuggestions] = useState<Tag[]>([])
   const [showSuggestions, setShowSuggestions] = useState(false)
-  const [availableTags, setAvailableTags] = useState<Tag[]>([])
   const inputRef = useRef<HTMLInputElement>(null)
+  
+  const { tags: availableTags, fetchTags, createTag } = useApiTags()
 
   useEffect(() => {
-    const storedTags = loadFromStorage("tags", [])
-    setAvailableTags(Array.isArray(storedTags) ? storedTags : [])
-  }, [])
+    fetchTags()
+  }, [fetchTags])
 
   useEffect(() => {
     if (inputValue.trim()) {
@@ -62,7 +57,7 @@ export default function TagInput({
     inputRef.current?.focus()
   }
 
-  const handleCreateTag = () => {
+  const handleCreateTag = async () => {
     if (!inputValue.trim()) return
 
     const existingTag = availableTags.find((tag) => tag.name.toLowerCase() === inputValue.toLowerCase())
@@ -72,22 +67,18 @@ export default function TagInput({
       return
     }
 
-    // Create new tag
-    const colors = ["#3B82F6", "#10B981", "#F59E0B", "#EF4444", "#8B5CF6", "#06B6D4", "#84CC16", "#F97316"]
-    const newTag: Tag = {
-      id: `tag_${Date.now()}`,
-      name: inputValue.trim(),
-      color: colors[Math.floor(Math.random() * colors.length)],
+    try {
+      const newTag = await createTag({
+        name: inputValue.trim(),
+      })
+
+      onTagsChange([...selectedTags, newTag.id])
+      setInputValue("")
+      setShowSuggestions(false)
+      inputRef.current?.focus()
+    } catch (error) {
+      console.error("Failed to create tag", error)
     }
-
-    const updatedTags = [...availableTags, newTag]
-    setAvailableTags(updatedTags)
-    saveToStorage(updatedTags, "tags")
-
-    onTagsChange([...selectedTags, newTag.id])
-    setInputValue("")
-    setShowSuggestions(false)
-    inputRef.current?.focus()
   }
 
   const handleRemoveTag = (tagId: string) => {

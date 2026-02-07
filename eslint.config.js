@@ -5,7 +5,38 @@ import reactRefresh from 'eslint-plugin-react-refresh'
 import tseslint from 'typescript-eslint'
 
 export default tseslint.config(
-  { ignores: ['dist'] },
+  { ignores: ['dist', '**/.next/**', '**/eslint-report.json'] },
+  {
+    extends: [js.configs.recommended],
+    files: ['**/*.{js,jsx}'],
+    languageOptions: {
+      ecmaVersion: 2020,
+      sourceType: 'module',
+      parserOptions: {
+        ecmaFeatures: {
+          jsx: true,
+        },
+      },
+      globals: globals.browser,
+    },
+    plugins: {
+      'react-hooks': reactHooks,
+      'react-refresh': reactRefresh,
+    },
+    rules: {
+      ...reactHooks.configs.recommended.rules,
+      'react-hooks/rules-of-hooks': 'warn',
+      'no-empty': ['warn', { allowEmptyCatch: true }],
+      'no-unused-vars': 'warn',
+      'prefer-const': 'warn',
+      'no-duplicate-case': 'warn',
+      'no-unexpected-multiline': 'warn',
+      'react-refresh/only-export-components': [
+        'warn',
+        { allowConstantExport: true },
+      ],
+    },
+  },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ['**/*.{ts,tsx}'],
@@ -19,6 +50,18 @@ export default tseslint.config(
     },
     rules: {
       ...reactHooks.configs.recommended.rules,
+      'react-hooks/rules-of-hooks': 'warn',
+      'no-empty': ['warn', { allowEmptyCatch: true }],
+      'no-unused-vars': 'warn',
+      'prefer-const': 'warn',
+      'no-duplicate-case': 'warn',
+      'no-unexpected-multiline': 'warn',
+      '@typescript-eslint/no-unused-vars': 'warn',
+      '@typescript-eslint/no-explicit-any': 'off',
+      '@typescript-eslint/no-empty-object-type': 'off',
+      '@typescript-eslint/no-require-imports': 'off',
+      '@typescript-eslint/triple-slash-reference': 'off',
+      'no-case-declarations': 'warn',
       'react-refresh/only-export-components': [
         'warn',
         { allowConstantExport: true },

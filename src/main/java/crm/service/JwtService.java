@@ -25,7 +25,7 @@ import java.util.function.Function;
 public class JwtService {
 
     @Value("${app.jwt.secret}")
-    private String base64Secret; // Secret string (must be >= 32 bytes)
+    private String secret; // Secret string (must be >= 32 bytes)
 
     @Value("${app.jwt.expiration-ms:3600000}") // 1 hora padrão (ajuste conforme necessidade)
     private long jwtExpirationMs;
@@ -35,16 +35,10 @@ public class JwtService {
         // Inclua o que fizer sentido no seu domínio (evite dados sensíveis)
         extra.put("uid", user.getId());
         extra.put("role", user.getRole());
-        // Se seu User tiver companyId:
-        try {
-            var companyIdField = user.getClass().getDeclaredField("companyId");
-            companyIdField.setAccessible(true);
-            Object companyId = companyIdField.get(user);
-            if (companyId != null) {
-                extra.put("companyId", companyId);
-            }
-        } catch (Exception ignore) {}
-
+        if (user.getCompanyId() != null) {
+            extra.put("companyId", user.getCompanyId());
+        }
+        
         return generateToken(extra, user.getEmail());
     }
 
@@ -57,6 +51,18 @@ public class JwtService {
                 .setExpiration(Date.from(now.plusMillis(jwtExpirationMs)))
                 .signWith(getSigningKey(), SignatureAlgorithm.HS256)
                 .compact();
+    }
+
+    /**
+     * Valida o token (assinatura e expiração).
+     */
+    public boolean validateToken(String token) {
+        try {
+            Jwts.parserBuilder().setSigningKey(getSigningKey()).build().parseClaimsJws(token);
+            return true;
+        } catch (Exception ex) {
+            return false;
+        }
     }
 
     public boolean isTokenValid(String token, String expectedSubject) {
@@ -88,11 +94,11 @@ public class JwtService {
 
     private SecretKey getSigningKey() {
         // Defensive: avoid NPE/IllegalArgumentException if secret is missing/too short
-        String secret = base64Secret;
-        if (secret == null || secret.trim().length() < 32) {
+        String s = secret;
+        if (s == null || s.trim().length() < 32) {
             // Fallback dev secret (do not use in production). Prevents 500 during local setup.
-            secret = "dev-secret-please-change-to-strong-32+chars-key";
+            s = "dev-secret-please-change-to-strong-32+chars-key";
         }
-        return Keys.hmacShaKeyFor(secret.getBytes());
+        return Keys.hmacShaKeyFor(s.getBytes());
     }
 }

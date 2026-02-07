@@ -1,12 +1,38 @@
 import { apiClient } from "../api-client"
 
 export interface AutomationAction {
-  type: "whatsapp" | "task" | "email" | "notification" | "transfer" | "batch_transfer"
+  id?: string
+  mode?: "automatic" | "manual"
+  enabled?: boolean
+  delayConfig?: { value: number; unit: "minutes" | "hours" | "days" }
+  next?: { kind: "action"; actionId: string } | { kind: "stage"; columnId: string; startActionId?: string } | null
+  type:
+    | "whatsapp"
+    | "task"
+    | "email"
+    | "notification"
+    | "move_lead"
+    | "transfer_command"
+    | "batch_transfer"
+    | "manual"
+  recipients?: "assigned" | "all_members" | "custom" | "lead_contact"
+  customRecipients?: string[]
+  variables?: Record<string, string>
+  waitForResponse?: boolean
+  responseTimeout?: number
+  responseTargetColumnId?: string
+  onResponseNext?: { kind: "stage"; columnId: string; startActionId?: string } | null
+  onNoResponseNext?: { kind: "action"; actionId: string } | { kind: "stage"; columnId: string; startActionId?: string } | null
   template?: string
   title?: string
+  customName?: string
+  description?: string
+  priority?: "low" | "medium" | "high" | "urgent"
+  dueInMinutes?: number
   assignTo?: string
   delay?: number
   targetColumnId?: string
+  targetFunnelId?: string
   batchSize?: number
   batchInterval?: number
   batchIntervalUnit?: "minutes" | "hours" | "days"

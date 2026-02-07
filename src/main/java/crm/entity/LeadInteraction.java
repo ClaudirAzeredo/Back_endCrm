@@ -22,6 +22,7 @@ public class LeadInteraction {
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "lead_id", nullable = false)
+    @com.fasterxml.jackson.annotation.JsonIgnore
     private Lead lead;
 
     // call | email | meeting | note | feedback

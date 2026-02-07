@@ -49,7 +49,8 @@ import {
   Trash2,
 } from "lucide-react"
 import TagInput from "./tag-input"
-import { loadFromStorage, getCurrentUser } from "@/lib/storage"
+import { getCurrentUser } from "@/lib/storage"
+import { useApiTags } from "@/hooks/use-api-tags"
 
 type Lead = {
   id: string
@@ -334,9 +335,16 @@ export default function LeadDetailsDialog({
     setEditContacts(editContacts.filter((contact) => contact.id !== id))
   }
 
-  const availableTags = loadFromStorage("tags", [])
+  const { tags: availableTags, fetchTags } = useApiTags()
+
+  useEffect(() => {
+    if (open) {
+      fetchTags()
+    }
+  }, [open, fetchTags])
+
   const selectedTagObjects = Array.isArray(availableTags)
-    ? availableTags.filter((tag: any) => (lead.tags || []).includes(tag.id))
+    ? availableTags.filter((tag) => (lead.tags || []).includes(tag.id))
     : []
 
   return (

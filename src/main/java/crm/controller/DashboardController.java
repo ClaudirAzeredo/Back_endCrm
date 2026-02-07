@@ -155,6 +155,7 @@ public class DashboardController {
             Map<String, Object> body = new LinkedHashMap<>();
             body.put("stats", stats);
             body.put("charts", charts);
+            body.put("leads", leads);
             return ResponseEntity.ok(body);
         } catch (Exception e) {
             return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));

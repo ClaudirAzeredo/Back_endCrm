@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -12,6 +12,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { toast } from "@/hooks/use-toast"
+import { automationsApi, type Automation } from "@/lib/api/automations-api"
+import { useApiMessageTemplates } from "@/hooks/use-api-message-templates"
+import { usersApi } from "@/lib/api/users-api"
+import { useApiAuth } from "@/hooks/use-api-auth"
 import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd"
 import {
   Plus,
@@ -28,6 +32,8 @@ import {
   Handshake,
   GripVertical,
   X,
+  CheckSquare,
+  ArrowRightLeft,
 } from "lucide-react"
 
 type Funnel = {
@@ -44,9 +50,43 @@ type Funnel = {
     description?: string
     visible?: boolean
     limit?: number
+    actions?: any[]
+    automationId?: string
   }>
   isActive: boolean
   createdAt: string
+}
+
+type StageAction = {
+  id: string
+  type: "whatsapp" | "task" | "move_lead"
+  
+  // WhatsApp specific
+  template?: string
+  recipients?: "lead_contact"
+  variables?: Record<string, string>
+  waitForResponse?: boolean
+  responseTimeout?: number
+  responseTargetColumnId?: string
+  onNoResponseNext?: { kind: "action"; actionId: string } | { kind: "stage"; columnId: string; startActionId?: string } | null
+
+  // Task specific
+  title?: string
+  description?: string
+  priority?: "low" | "medium" | "high" | "urgent"
+  dueInMinutes?: number
+
+  // Move Lead specific
+  targetFunnelId?: string
+  targetColumnId?: string
+  assignTo?: string
+
+  // Common
+  enabled: boolean
+  customName?: string
+  mode: "automatic"
+  delayConfig?: { value: number; unit: "minutes" | "hours" | "days" }
+  next?: { kind: "action"; actionId: string } | { kind: "stage"; columnId: string; startActionId?: string } | null
 }
 
 type FunnelTemplate = {
@@ -66,6 +106,7 @@ type FunnelTemplate = {
 
 interface FunnelManagerProps {
   funnels: Funnel[]
+  checkHasLeads?: (funnelId: string) => Promise<boolean>
   onSave: (funnels: Funnel[]) => void
   onClose: () => void
 }
@@ -185,11 +226,6 @@ const availableColors = [
   "#ec4899",
   "#6366f1",
   "#14b8a6",
-  "#f59e0b",
-  "#8b5cf6",
-  "#ef4444",
-  "#10b981",
-  "#64748b",
 ]
 
 // Ícones disponíveis
@@ -204,11 +240,20 @@ const availableIcons = [
   { id: "handshake", name: "Aperto de Mão", icon: Handshake },
 ]
 
-export default function FunnelManager({ funnels, onSave, onClose }: FunnelManagerProps) {
+export default function FunnelManager({ funnels, checkHasLeads, onSave, onClose }: FunnelManagerProps) {
   const [localFunnels, setLocalFunnels] = useState<Funnel[]>(funnels)
   const [showCreateDialog, setShowCreateDialog] = useState(false)
   const [editingFunnel, setEditingFunnel] = useState<Funnel | null>(null)
   const [activeTab, setActiveTab] = useState("funnels")
+
+  const { templates, fetchTemplates } = useApiMessageTemplates()
+  const { user: currentUser } = useApiAuth()
+  const [availableUsers, setAvailableUsers] = useState<any[]>([])
+
+  useEffect(() => {
+    fetchTemplates()
+    usersApi.list().then(setAvailableUsers).catch(() => setAvailableUsers([]))
+  }, [fetchTemplates])
 
   // Estados para criação/edição
   const [funnelName, setFunnelName] = useState("")
@@ -222,8 +267,266 @@ export default function FunnelManager({ funnels, onSave, onClose }: FunnelManage
       color: string
       order: number
       description?: string
+      actions?: StageAction[]
+      automationId?: string
     }>
   >([])
+
+  const [showStageActionDialog, setShowStageActionDialog] = useState(false)
+  const [stageActionColumnId, setStageActionColumnId] = useState<string | null>(null)
+  const [editingStageActionId, setEditingStageActionId] = useState<string | null>(null)
+  const [stageActionDraft, setStageActionDraft] = useState<StageAction>({
+    id: "",
+    type: "whatsapp",
+    template: "",
+    recipients: "lead_contact",
+    variables: {},
+    enabled: true,
+    mode: "automatic",
+    waitForResponse: true,
+    responseTimeout: 24 * 60,
+    responseTargetColumnId: "",
+    onNoResponseNext: null,
+    next: null,
+  })
+
+  const automationNameFor = (funnelId: string, columnId: string) => `stage_flow:${funnelId}:${columnId}`
+
+  const getColumnName = (columnId: string) => {
+    const local = funnelColumns.find((c) => c.id === columnId)
+    if (local) return local.name
+    
+    // Search in all funnels
+    for (const f of localFunnels) {
+      const c = f.columns.find((col) => col.id === columnId)
+      if (c) return `${f.name} > ${c.name}`
+    }
+
+    return "Etapa não encontrada"
+  }
+
+  const getActionLabel = (columnId: string, actionId: string) => {
+    const col = funnelColumns.find((c) => c.id === columnId)
+    const actions = Array.isArray(col?.actions) ? col!.actions! : []
+    const idx = actions.findIndex((a) => a.id === actionId)
+    const action = actions[idx]
+    if (action && action.customName) return action.customName
+    const n = idx >= 0 ? idx + 1 : 0
+    const stageName = col?.name || "Etapa"
+    
+    let typeLabel = "Ação"
+    if (action) {
+      if (action.type === "whatsapp") typeLabel = "WhatsApp"
+      else if (action.type === "task") typeLabel = "Tarefa"
+      else if (action.type === "move_lead") typeLabel = "Transferir"
+    }
+
+    return n > 0 ? `${stageName} / ${typeLabel} ${n}` : `${stageName} / ${typeLabel}`
+  }
+
+  const encodeNoResponseTarget = (t: StageAction["onNoResponseNext"], currentColumnId: string) => {
+    if (!t) return "next"
+    if (t.kind === "action") return `action:${t.actionId}`
+    if (t.startActionId) return `stage:${t.columnId}:action:${t.startActionId}`
+    return `stage:${t.columnId}`
+  }
+
+  const decodeNoResponseTarget = (value: string): StageAction["onNoResponseNext"] => {
+    if (!value || value === "next") return null
+    if (value.startsWith("action:")) {
+      return { kind: "action", actionId: value.slice("action:".length) }
+    }
+    if (value.startsWith("stage:")) {
+      const parts = value.split(":")
+      const columnId = parts[1]
+      const actionIdx = parts.findIndex((p) => p === "action")
+      if (actionIdx >= 0 && parts[actionIdx + 1]) {
+        return { kind: "stage", columnId, startActionId: parts[actionIdx + 1] }
+      }
+      return { kind: "stage", columnId }
+    }
+    return null
+  }
+
+  const openNewStageAction = (columnId: string) => {
+    setStageActionColumnId(columnId)
+    setEditingStageActionId(null)
+    setStageActionDraft({
+      id: `act_${Date.now()}`,
+      type: "whatsapp",
+      template: "",
+      recipients: "lead_contact",
+      variables: {},
+      enabled: true,
+      mode: "automatic",
+      waitForResponse: true,
+      responseTimeout: 24 * 60,
+      responseTargetColumnId: "",
+      onNoResponseNext: null,
+      next: null,
+    })
+    setShowStageActionDialog(true)
+  }
+
+  const openEditStageAction = (columnId: string, action: StageAction) => {
+    setStageActionColumnId(columnId)
+    setEditingStageActionId(action.id)
+    setStageActionDraft({
+      id: action.id,
+      type: action.type || "whatsapp",
+      template: action.template || "",
+      recipients: "lead_contact",
+      variables: action.variables || {},
+      enabled: action.enabled ?? true,
+      mode: "automatic",
+      delayConfig: action.delayConfig,
+      next: action.next ?? null,
+      waitForResponse: action.waitForResponse ?? false,
+      responseTimeout: action.responseTimeout ?? 24 * 60,
+      responseTargetColumnId: action.responseTargetColumnId || "",
+      onNoResponseNext: action.onNoResponseNext ?? null,
+      customName: action.customName || "",
+      // Task fields
+      title: action.title || "",
+      description: action.description || "",
+      priority: action.priority || "medium",
+      dueInMinutes: action.dueInMinutes || 60,
+      // Move Lead fields
+      targetFunnelId: action.targetFunnelId || "",
+      targetColumnId: action.targetColumnId || "",
+      assignTo: action.assignTo || "",
+    })
+    setShowStageActionDialog(true)
+  }
+
+  const upsertStageAction = () => {
+    if (!stageActionColumnId) return
+    
+    // Validation
+    if (stageActionDraft.type === "whatsapp" && !stageActionDraft.template?.trim()) {
+      toast({ title: "Erro", description: "A mensagem/template do WhatsApp é obrigatória.", variant: "destructive" })
+      return
+    }
+    if (stageActionDraft.type === "task" && !stageActionDraft.title?.trim()) {
+      toast({ title: "Erro", description: "O título da tarefa é obrigatório.", variant: "destructive" })
+      return
+    }
+    if (stageActionDraft.type === "move_lead") {
+      if (!stageActionDraft.targetFunnelId && !stageActionDraft.targetColumnId && !stageActionDraft.assignTo) {
+         toast({ title: "Erro", description: "Selecione um destino (Funil, Etapa ou Usuário) para transferir.", variant: "destructive" })
+         return
+      }
+    }
+
+    if (stageActionDraft.type === "whatsapp" && stageActionDraft.waitForResponse && !stageActionDraft.responseTargetColumnId) {
+      toast({ title: "Erro", description: "Selecione a etapa de destino (Responde).", variant: "destructive" })
+      return
+    }
+
+    setFunnelColumns((prev) =>
+      prev.map((c) => {
+        if (c.id !== stageActionColumnId) return c
+        const actions = Array.isArray(c.actions) ? [...c.actions] : []
+        const idx = actions.findIndex((a) => a.id === stageActionDraft.id)
+        if (idx >= 0) actions[idx] = stageActionDraft
+        else actions.push(stageActionDraft)
+        return { ...c, actions }
+      }),
+    )
+    setShowStageActionDialog(false)
+    setStageActionColumnId(null)
+    setEditingStageActionId(null)
+  }
+
+  const removeStageAction = (columnId: string, actionId: string) => {
+    setFunnelColumns((prev) =>
+      prev.map((c) => {
+        if (c.id !== columnId) return c
+        return { ...c, actions: (c.actions || []).filter((a) => a.id !== actionId) }
+      }),
+    )
+  }
+
+  const hydrateStageActionsFromApi = async (funnel: Funnel) => {
+    try {
+      const cols = funnel.columns || []
+      const results = await Promise.all(
+        cols.map(async (col) => {
+          try {
+            const autos = await automationsApi.getAutomations({ columnId: col.id })
+            const name = automationNameFor(funnel.id, col.id)
+            const found = autos.find((a) => a?.name === name && a?.trigger === "on_enter")
+            if (!found) return { columnId: col.id, actions: undefined, automationId: undefined }
+            const actions = Array.isArray(found.actions) ? found.actions : []
+            return { columnId: col.id, actions, automationId: found.id }
+          } catch {
+            return { columnId: col.id, actions: undefined, automationId: undefined }
+          }
+        }),
+      )
+      setFunnelColumns((prev) =>
+        prev.map((c) => {
+          const r = results.find((x) => x.columnId === c.id)
+          if (!r) return c
+          if (!r.actions) return { ...c, automationId: r.automationId || c.automationId }
+          return { ...c, actions: r.actions as any, automationId: r.automationId || c.automationId }
+        }),
+      )
+    } catch {}
+  }
+
+  const persistStageAutomations = async (funnelsToPersist: Funnel[]) => {
+    const targets: Array<{ funnelId: string; columnId: string; actions: any[]; automationId?: string }> = []
+    for (const f of funnelsToPersist) {
+      const cols = f.columns || []
+      for (const col of cols) {
+        const actions = Array.isArray((col as any).actions) ? ((col as any).actions as any[]) : []
+        if (actions.length === 0) continue
+        targets.push({ funnelId: f.id, columnId: col.id, actions, automationId: (col as any).automationId })
+      }
+    }
+    if (targets.length === 0) return
+
+    for (const t of targets) {
+      const name = automationNameFor(t.funnelId, t.columnId)
+      const payload: any = {
+        name,
+        columnId: t.columnId,
+        trigger: "on_enter",
+        actions: t.actions,
+        active: true,
+        delay: 0,
+        funnelId: t.funnelId,
+      }
+      try {
+        let idToUpdate: string | undefined = t.automationId
+        if (!idToUpdate) {
+          const existing = await automationsApi.getAutomations({ columnId: t.columnId })
+          const found = existing.find((a) => a?.name === name && a?.trigger === "on_enter")
+          if (found?.id) idToUpdate = found.id
+        }
+
+        if (idToUpdate) {
+          await automationsApi.updateAutomation(idToUpdate, payload)
+        } else {
+          const created = await automationsApi.createAutomation(payload)
+          idToUpdate = (created as any)?.id
+        }
+
+        setLocalFunnels((prev) =>
+          prev.map((f) => {
+            if (f.id !== t.funnelId) return f
+            return {
+              ...f,
+              columns: f.columns.map((c) =>
+                c.id === t.columnId ? ({ ...c, automationId: idToUpdate } as any) : c,
+              ),
+            }
+          }),
+        )
+      } catch {}
+    }
+  }
 
   const handleCreateFunnel = () => {
     setFunnelName("")
@@ -243,6 +546,7 @@ export default function FunnelManager({ funnels, onSave, onClose }: FunnelManage
     setFunnelColumns(funnel.columns.map((col) => ({ ...col })))
     setEditingFunnel(funnel)
     setShowCreateDialog(true)
+    void hydrateStageActionsFromApi(funnel)
   }
 
   const handleDuplicateFunnel = (funnel: Funnel) => {
@@ -259,9 +563,31 @@ export default function FunnelManager({ funnels, onSave, onClose }: FunnelManage
     })
   }
 
-  const handleDeleteFunnel = (funnelId: string) => {
+  const handleDeleteFunnel = async (funnelId: string) => {
     const funnel = localFunnels.find((f) => f.id === funnelId)
     if (!funnel) return
+
+    if (checkHasLeads) {
+      try {
+        const hasLeads = await checkHasLeads(funnelId)
+        if (hasLeads) {
+          toast({
+            title: "Operação não permitida",
+            description: `O funil "${funnel.name}" não pode ser excluído pois contém leads.`,
+            variant: "destructive",
+          })
+          return
+        }
+      } catch (error) {
+        console.error("Failed to check leads", error)
+        toast({
+          title: "Erro ao verificar leads",
+          description: "Não foi possível verificar se existem leads neste funil.",
+          variant: "destructive",
+        })
+        return
+      }
+    }
 
     setLocalFunnels((prev) => prev.filter((f) => f.id !== funnelId))
     toast({
@@ -477,7 +803,19 @@ export default function FunnelManager({ funnels, onSave, onClose }: FunnelManage
               <Button variant="outline" onClick={onClose}>
                 Cancelar
               </Button>
-              <Button onClick={() => onSave(localFunnels)}>Salvar Alterações</Button>
+              <Button
+                onClick={async () => {
+                  onSave(localFunnels)
+                  try {
+                    await persistStageAutomations(localFunnels)
+                    toast({ title: "Ações por etapa salvas", description: "As automações por etapa foram atualizadas." })
+                  } catch {
+                    toast({ title: "Erro", description: "Falha ao salvar automações por etapa.", variant: "destructive" })
+                  }
+                }}
+              >
+                Salvar Alterações
+              </Button>
             </div>
           </TabsContent>
 
@@ -616,73 +954,127 @@ export default function FunnelManager({ funnels, onSave, onClose }: FunnelManage
                           {funnelColumns.map((column, index) => (
                             <Draggable key={column.id} draggableId={column.id} index={index}>
                               {(provided) => (
-                                <div
-                                  ref={provided.innerRef}
-                                  {...provided.draggableProps}
-                                  className="flex items-center space-x-3 p-3 border rounded-lg bg-white"
-                                >
-                                  <div {...provided.dragHandleProps}>
-                                    <GripVertical className="h-4 w-4 text-gray-400" />
-                                  </div>
-
-                                  <div className="flex-1 grid grid-cols-1 md:grid-cols-3 gap-3">
-                                    <div>
-                                      <Input
-                                        value={column.name}
-                                        onChange={(e) => updateColumn(column.id, { name: e.target.value })}
-                                        placeholder="Nome da etapa"
-                                      />
+                                <div ref={provided.innerRef} {...provided.draggableProps} className="space-y-2">
+                                  <div className="flex items-center space-x-3 p-3 border rounded-lg bg-white">
+                                    <div {...provided.dragHandleProps}>
+                                      <GripVertical className="h-4 w-4 text-gray-400" />
                                     </div>
 
-                                    <div>
-                                      <Select
-                                        value={column.color}
-                                        onValueChange={(color) => updateColumn(column.id, { color })}
+                                    <div className="flex-1 grid grid-cols-1 md:grid-cols-3 gap-3">
+                                      <div>
+                                        <Input
+                                          value={column.name}
+                                          onChange={(e) => updateColumn(column.id, { name: e.target.value })}
+                                          placeholder="Nome da etapa"
+                                        />
+                                      </div>
+
+                                      <div>
+                                        <Select value={column.color} onValueChange={(color) => updateColumn(column.id, { color })}>
+                                          <SelectTrigger>
+                                            <div className="flex items-center space-x-2">
+                                              <div className="w-4 h-4 rounded-full" style={{ backgroundColor: column.color }} />
+                                              <SelectValue />
+                                            </div>
+                                          </SelectTrigger>
+                                          <SelectContent>
+                                            {availableColors.map((color) => (
+                                              <SelectItem key={color} value={color}>
+                                                <div className="flex items-center space-x-2">
+                                                  <div className="w-4 h-4 rounded-full" style={{ backgroundColor: color }} />
+                                                  <span>{color}</span>
+                                                </div>
+                                              </SelectItem>
+                                            ))}
+                                          </SelectContent>
+                                        </Select>
+                                      </div>
+
+                                      <div>
+                                        <Input
+                                          value={column.description || ""}
+                                          onChange={(e) => updateColumn(column.id, { description: e.target.value })}
+                                          placeholder="Descrição (opcional)"
+                                        />
+                                      </div>
+                                    </div>
+
+                                    {funnelColumns.length > 1 && (
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={() => removeColumn(column.id)}
+                                        className="text-red-600 hover:text-red-700"
                                       >
-                                        <SelectTrigger>
-                                          <div className="flex items-center space-x-2">
-                                            <div
-                                              className="w-4 h-4 rounded-full"
-                                              style={{ backgroundColor: column.color }}
-                                            />
-                                            <SelectValue />
-                                          </div>
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                          {availableColors.map((color) => (
-                                            <SelectItem key={color} value={color}>
-                                              <div className="flex items-center space-x-2">
-                                                <div
-                                                  className="w-4 h-4 rounded-full"
-                                                  style={{ backgroundColor: color }}
-                                                />
-                                                <span>{color}</span>
-                                              </div>
-                                            </SelectItem>
-                                          ))}
-                                        </SelectContent>
-                                      </Select>
-                                    </div>
-
-                                    <div>
-                                      <Input
-                                        value={column.description || ""}
-                                        onChange={(e) => updateColumn(column.id, { description: e.target.value })}
-                                        placeholder="Descrição (opcional)"
-                                      />
-                                    </div>
+                                        <X className="h-4 w-4" />
+                                      </Button>
+                                    )}
                                   </div>
 
-                                  {funnelColumns.length > 1 && (
-                                    <Button
-                                      variant="ghost"
-                                      size="sm"
-                                      onClick={() => removeColumn(column.id)}
-                                      className="text-red-600 hover:text-red-700"
-                                    >
-                                      <X className="h-4 w-4" />
-                                    </Button>
-                                  )}
+                                  <div className="pl-7 space-y-2">
+                                    {(column.actions || []).length > 0 && (
+                                      <div className="space-y-2">
+                                        {(column.actions || []).map((a, ai) => (
+                                          <Card key={a.id} className="border-l-4" style={{ borderLeftColor: column.color }}>
+                                            <CardContent className="p-3 flex items-start justify-between gap-3">
+                                              <div className="min-w-0">
+                                                <div className="flex items-center gap-2 flex-wrap">
+                                                  <Badge variant="outline">
+                                                    {a.type === "task" ? "Tarefa" : 
+                                                     a.type === "move_lead" ? "Transferir" : "WhatsApp"}
+                                                  </Badge>
+                                                  <span className="text-sm font-medium">Ação {ai + 1}</span>
+                                                  {a.type === "whatsapp" && (
+                                                    a.waitForResponse ? (
+                                                      <Badge className="bg-green-100 text-green-800">Responde → {getColumnName(a.responseTargetColumnId || "")}</Badge>
+                                                    ) : (
+                                                      <Badge variant="secondary">Sem espera</Badge>
+                                                    )
+                                                  )}
+                                                </div>
+                                                <div className="text-xs text-muted-foreground truncate mt-1">
+                                                  {a.type === "task" ? `Tarefa: ${a.title}` :
+                                                   a.type === "move_lead" ? `Mover para: ${getColumnName(a.targetColumnId || "")}` :
+                                                   a.template}
+                                                </div>
+                                                {a.waitForResponse ? (
+                                                  <div className="text-xs text-muted-foreground mt-1">
+                                                    {(() => {
+                                                      const t = a.onNoResponseNext
+                                                      if (!t) return "Não responde → próxima ação"
+                                                      if (t.kind === "action") return `Não responde → ${getActionLabel(column.id, t.actionId)}`
+                                                      if (t.startActionId) return `Não responde → ${getActionLabel(t.columnId, t.startActionId)}`
+                                                      return `Não responde → ${getColumnName(t.columnId)}`
+                                                    })()}
+                                                  </div>
+                                                ) : null}
+                                              </div>
+                                              <div className="flex gap-1">
+                                                <Button variant="ghost" size="sm" onClick={() => openEditStageAction(column.id, a)}>
+                                                  <Edit className="h-4 w-4" />
+                                                </Button>
+                                                <Button
+                                                  variant="ghost"
+                                                  size="sm"
+                                                  className="text-red-600 hover:text-red-700"
+                                                  onClick={() => removeStageAction(column.id, a.id)}
+                                                >
+                                                  <Trash2 className="h-4 w-4" />
+                                                </Button>
+                                              </div>
+                                            </CardContent>
+                                          </Card>
+                                        ))}
+                                      </div>
+                                    )}
+
+                                    <div className="flex">
+                                      <Button variant="outline" size="sm" onClick={() => openNewStageAction(column.id)} className="gap-2">
+                                        <Plus className="h-4 w-4" />
+                                        Adicionar ação
+                                      </Button>
+                                    </div>
+                                  </div>
                                 </div>
                               )}
                             </Draggable>
@@ -693,6 +1085,366 @@ export default function FunnelManager({ funnels, onSave, onClose }: FunnelManage
                     </Droppable>
                   </DragDropContext>
                 </div>
+
+                <Dialog open={showStageActionDialog} onOpenChange={setShowStageActionDialog}>
+                  <DialogContent className="max-w-3xl">
+                    <DialogHeader>
+                      <DialogTitle>{editingStageActionId ? "Editar ação" : "Adicionar ação"}</DialogTitle>
+                    </DialogHeader>
+
+                    <div className="grid gap-4 py-4 max-h-[80vh] overflow-y-auto px-1">
+                      
+                      {/* Action Name */}
+                      <div className="space-y-2">
+                        <Label>Nome da Ação (Opcional)</Label>
+                        <Input
+                          value={stageActionDraft.customName || ""}
+                          onChange={(e) => setStageActionDraft({ ...stageActionDraft, customName: e.target.value })}
+                          placeholder="Ex: Envio de Saudação"
+                        />
+                      </div>
+
+                      {/* Action Type Selection */}
+                      <div className="space-y-2">
+                        <Label>Tipo de Ação</Label>
+                        <Select
+                          value={stageActionDraft.type}
+                          onValueChange={(value: any) => setStageActionDraft({ ...stageActionDraft, type: value })}
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="Selecione o tipo..." />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="whatsapp">
+                              <div className="flex items-center gap-2">
+                                <Users className="h-4 w-4" />
+                                Enviar WhatsApp
+                              </div>
+                            </SelectItem>
+                            <SelectItem value="task">
+                              <div className="flex items-center gap-2">
+                                <CheckSquare className="h-4 w-4" />
+                                Criar Tarefa
+                              </div>
+                            </SelectItem>
+                            <SelectItem value="move_lead">
+                              <div className="flex items-center gap-2">
+                                <ArrowRightLeft className="h-4 w-4" />
+                                Transferir Lead
+                              </div>
+                            </SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      {/* WhatsApp Config */}
+                      {stageActionDraft.type === "whatsapp" && (
+                        <>
+                          <div className="space-y-2">
+                            <Label>Template de Mensagem</Label>
+                             <Select
+                                value={""}
+                                onValueChange={(value) => {
+                                  const selected = templates.find(t => t.id === value)
+                                  if (selected) {
+                                      let content = ""
+                                      if (typeof selected.content === 'string') content = selected.content
+                                      else if (selected.content?.text) content = selected.content.text
+                                      else content = JSON.stringify(selected.content)
+                                      
+                                      setStageActionDraft({ ...stageActionDraft, template: content })
+                                      toast({ description: "Template carregado para a mensagem." })
+                                  }
+                                }}
+                              >
+                                <SelectTrigger>
+                                  <SelectValue placeholder="Carregar do template..." />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {templates.map((t) => (
+                                    <SelectItem key={t.id} value={t.id}>
+                                      {t.name}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                          </div>
+
+                          <div className="space-y-2">
+                            <Label>Mensagem (WhatsApp)</Label>
+                            <Textarea
+                              value={stageActionDraft.template}
+                              onChange={(e) => setStageActionDraft({ ...stageActionDraft, template: e.target.value })}
+                              placeholder="Digite a mensagem..."
+                              rows={5}
+                            />
+                            <p className="text-xs text-muted-foreground">
+                              Você pode selecionar um template acima ou digitar manualmente.
+                            </p>
+                          </div>
+
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                              <Label>Esperar resposta</Label>
+                              <div className="flex items-center gap-2 h-10">
+                                <Switch
+                                  checked={!!stageActionDraft.waitForResponse}
+                                  onCheckedChange={(checked) =>
+                                    setStageActionDraft({
+                                      ...stageActionDraft,
+                                      waitForResponse: checked,
+                                      responseTargetColumnId: checked ? stageActionDraft.responseTargetColumnId : "",
+                                    })
+                                  }
+                                />
+                                <span className="text-sm text-muted-foreground">Responde → mover etapa</span>
+                              </div>
+                            </div>
+
+                            <div className="space-y-2">
+                              <Label>Tempo limite (minutos)</Label>
+                              <Input
+                                type="number"
+                                value={stageActionDraft.responseTimeout ?? 0}
+                                onChange={(e) =>
+                                  setStageActionDraft({
+                                    ...stageActionDraft,
+                                    responseTimeout: e.target.value ? Number(e.target.value) : 0,
+                                  })
+                                }
+                                placeholder="1440"
+                                disabled={!stageActionDraft.waitForResponse}
+                              />
+                            </div>
+                          </div>
+
+                          {stageActionDraft.waitForResponse && (
+                            <div className="space-y-2">
+                              <Label>Se responder, mover para</Label>
+                              <Select
+                                value={stageActionDraft.responseTargetColumnId || ""}
+                                onValueChange={(value) => setStageActionDraft({ ...stageActionDraft, responseTargetColumnId: value })}
+                              >
+                                <SelectTrigger>
+                                  <SelectValue placeholder="Selecione a etapa..." />
+                                </SelectTrigger>
+                                <SelectContent>
+                                {funnelColumns
+                                  .map((c) => (
+                                    <SelectItem key={c.id} value={c.id}>
+                                      {c.name}
+                                    </SelectItem>
+                                  ))}
+                              </SelectContent>
+                              </Select>
+
+                              <div className="space-y-2 pt-2">
+                                <Label>Se não responder, ir para</Label>
+                                <Select
+                                  value={encodeNoResponseTarget(stageActionDraft.onNoResponseNext ?? null, stageActionColumnId || "")}
+                                  onValueChange={(value) =>
+                                    setStageActionDraft({
+                                      ...stageActionDraft,
+                                      onNoResponseNext: decodeNoResponseTarget(value),
+                                    })
+                                  }
+                                >
+                                  <SelectTrigger>
+                                    <SelectValue placeholder="Selecione um destino..." />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="next">Próxima ação (mesma etapa)</SelectItem>
+
+                                    {(() => {
+                                      const current = funnelColumns.find((c) => c.id === stageActionColumnId)
+                                      const currentActions = Array.isArray(current?.actions) ? current!.actions! : []
+                                      const otherInStage = currentActions
+                                        .filter((a) => a.id !== stageActionDraft.id)
+                                        .map((a) => (
+                                          <SelectItem key={`action:${a.id}`} value={`action:${a.id}`}>
+                                            Ação desta etapa: {getActionLabel(stageActionColumnId || "", a.id)}
+                                          </SelectItem>
+                                        ))
+                                      if (otherInStage.length === 0) return null
+                                      return otherInStage
+                                    })()}
+
+                                    {funnelColumns.map((c) => (
+                                      <SelectItem key={`stage:${c.id}`} value={`stage:${c.id}`}>
+                                        Etapa: {c.name}
+                                      </SelectItem>
+                                    ))}
+
+                                    {funnelColumns
+                                      .filter((c) => c.id !== stageActionColumnId)
+                                      .flatMap((c) => {
+                                        const actions = Array.isArray(c.actions) ? c.actions : []
+                                        return actions
+                                          .filter((a) => a.id !== stageActionDraft.id)
+                                          .map((a) => (
+                                            <SelectItem key={`stage:${c.id}:action:${a.id}`} value={`stage:${c.id}:action:${a.id}`}>
+                                              Ação em outra etapa: {getActionLabel(c.id, a.id)}
+                                            </SelectItem>
+                                          ))
+                                      })}
+                                  </SelectContent>
+                                </Select>
+                                <div className="text-xs text-muted-foreground">
+                                  Você pode continuar na sequência, pular para outra etapa, ou iniciar uma ação específica de outra etapa.
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                        </>
+                      )}
+
+                      {/* Task Config */}
+                      {stageActionDraft.type === "task" && (
+                        <>
+                          <div className="space-y-2">
+                            <Label>Título da Tarefa</Label>
+                            <Input
+                              value={stageActionDraft.title || ""}
+                              onChange={(e) => setStageActionDraft({ ...stageActionDraft, title: e.target.value })}
+                              placeholder="Ex: Ligar para cliente"
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <Label>Descrição</Label>
+                            <Textarea
+                              value={stageActionDraft.description || ""}
+                              onChange={(e) => setStageActionDraft({ ...stageActionDraft, description: e.target.value })}
+                              placeholder="Detalhes da tarefa..."
+                            />
+                          </div>
+                          <div className="grid grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                              <Label>Prioridade</Label>
+                              <Select
+                                value={stageActionDraft.priority || "medium"}
+                                onValueChange={(value: any) => setStageActionDraft({ ...stageActionDraft, priority: value })}
+                              >
+                                <SelectTrigger>
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="low">Baixa</SelectItem>
+                                  <SelectItem value="medium">Média</SelectItem>
+                                  <SelectItem value="high">Alta</SelectItem>
+                                  <SelectItem value="urgent">Urgente</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </div>
+                            <div className="space-y-2">
+                              <Label>Prazo (minutos após criação)</Label>
+                              <Input
+                                type="number"
+                                value={stageActionDraft.dueInMinutes || 60}
+                                onChange={(e) => setStageActionDraft({ ...stageActionDraft, dueInMinutes: Number(e.target.value) })}
+                              />
+                            </div>
+                          </div>
+                        </>
+                      )}
+
+                      {/* Move Lead Config */}
+                      {stageActionDraft.type === "move_lead" && (
+                        <>
+                           <div className="space-y-2">
+                            <Label>Transferir para outro Funil?</Label>
+                            <Select
+                              value={stageActionDraft.targetFunnelId || "same"}
+                              onValueChange={(value) => setStageActionDraft({ ...stageActionDraft, targetFunnelId: value === "same" ? "" : value })}
+                            >
+                              <SelectTrigger>
+                                <SelectValue placeholder="Selecione o funil..." />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="same">Mesmo Funil</SelectItem>
+                                {localFunnels.filter(f => f.id !== editingFunnel?.id).map(f => (
+                                  <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+
+                          <div className="space-y-2">
+                            <Label>Etapa de Destino</Label>
+                            <Select
+                              value={stageActionDraft.targetColumnId || ""}
+                              onValueChange={(value) => setStageActionDraft({ ...stageActionDraft, targetColumnId: value })}
+                            >
+                              <SelectTrigger>
+                                <SelectValue placeholder="Selecione a etapa..." />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {(() => {
+                                  const targetFunnel = stageActionDraft.targetFunnelId 
+                                    ? localFunnels.find(f => f.id === stageActionDraft.targetFunnelId)
+                                    : editingFunnel
+                                  
+                                  const columns = stageActionDraft.targetFunnelId 
+                                    ? targetFunnel?.columns || []
+                                    : funnelColumns
+
+                                  return columns.map((c) => (
+                                    <SelectItem key={c.id} value={c.id}>
+                                      {c.name}
+                                    </SelectItem>
+                                  ))
+                                })()}
+                              </SelectContent>
+                            </Select>
+                          </div>
+
+                          <div className="space-y-2">
+                            <Label>Transferir Responsável (Opcional)</Label>
+                            <Select
+                              value={stageActionDraft.assignTo || ""}
+                              onValueChange={(value) => setStageActionDraft({ ...stageActionDraft, assignTo: value === "no_change" ? "" : value })}
+                            >
+                              <SelectTrigger>
+                                <SelectValue placeholder="Manter responsável atual" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="no_change">Manter responsável atual</SelectItem>
+                                {availableUsers.map((u) => (
+                                  <SelectItem key={u.id} value={u.id}>
+                                    {u.name}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        </>
+                      )}
+
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <Switch
+                            checked={stageActionDraft.enabled}
+                            onCheckedChange={(enabled) => setStageActionDraft({ ...stageActionDraft, enabled })}
+                          />
+                          <Label>Habilitada</Label>
+                        </div>
+
+                        <div className="flex gap-2">
+                          <Button
+                            variant="outline"
+                            onClick={() => {
+                              setShowStageActionDialog(false)
+                              setStageActionColumnId(null)
+                              setEditingStageActionId(null)
+                            }}
+                          >
+                            Cancelar
+                          </Button>
+                          <Button onClick={upsertStageAction}>Salvar</Button>
+                        </div>
+                      </div>
+                    </div>
+                  </DialogContent>
+                </Dialog>
 
                 <div className="flex justify-end space-x-2 pt-4">
                   <Button variant="outline" onClick={() => setShowCreateDialog(false)}>

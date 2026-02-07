@@ -52,6 +52,9 @@ public class Lead {
     @Column(nullable = false)
     private String funnelId;
 
+    // ID da ação atual que o lead está executando na automação
+    private String currentActionId;
+
     // low | medium | high | urgent (default: medium)
     @Column(nullable = false)
     @Builder.Default

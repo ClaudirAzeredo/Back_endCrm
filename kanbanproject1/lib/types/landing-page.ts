@@ -1,3 +1,5 @@
+import { BuilderElement } from "@/lib/types/builder-types"
+
 export type FieldType = "text" | "email" | "phone" | "cpf" | "cnpj" | "custom"
 
 export interface FormField {
@@ -26,7 +28,7 @@ export interface LandingPage {
   funnelId?: string
   stageId?: string
   funnelStage?: string
-  elements: LandingPageElement[]
+  elements: BuilderElement[]
   backgroundColor: string
   tagIds?: string[]
   createdAt: string

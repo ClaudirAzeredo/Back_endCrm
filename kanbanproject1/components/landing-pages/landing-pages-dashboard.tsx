@@ -8,7 +8,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Plus, ExternalLink, Trash2, Edit, Users, QrCode } from "lucide-react"
 import type { LandingPage } from "@/lib/types/landing-page"
 import { getLandingPages, deleteLandingPage, saveLandingPage } from "@/lib/landing-page-storage"
-import DragDropBuilder from "./drag-drop-builder"
+import { BuilderLayout } from "./builder/builder-layout"
+import { BuilderElement } from "@/lib/types/builder-types"
 import LandingPageDetails from "./landing-page-details"
 
 export default function LandingPagesDashboard() {
@@ -82,11 +83,51 @@ export default function LandingPagesDashboard() {
   }
 
   if (view === "create") {
-    return <DragDropBuilder onSave={handleSave} onClose={handleBack} />
+    return (
+      <BuilderLayout 
+        onSave={(elements, settings) => handleSave({
+          name: "Nova Landing Page",
+          elements,
+          backgroundColor: "#ffffff",
+          leads: [],
+          tagIds: settings?.tagIds,
+          funnelId: settings?.funnelId,
+          stageId: settings?.stageId
+        })} 
+        onClose={handleBack} 
+      />
+    )
   }
 
   if (view === "edit" && selectedPage) {
-    return <DragDropBuilder landingPage={selectedPage} onSave={handleSave} onClose={handleBack} />
+    return (
+      <BuilderLayout 
+        initialElements={selectedPage.elements}
+        initialSettings={{
+          tagIds: selectedPage.tagIds,
+          funnelId: selectedPage.funnelId,
+          stageId: selectedPage.stageId
+        }}
+        onSave={(elements, settings) => handleSave({
+          name: selectedPage.name,
+          elements,
+          backgroundColor: selectedPage.backgroundColor,
+          leads: selectedPage.leads,
+          companyId: selectedPage.companyId,
+          funnelId: settings?.funnelId ?? selectedPage.funnelId,
+          stageId: settings?.stageId ?? selectedPage.stageId,
+          funnelStage: settings?.funnelStage ?? selectedPage.funnelStage,
+          tagIds: settings?.tagIds ?? selectedPage.tagIds,
+          title: selectedPage.title,
+          subtitle: selectedPage.subtitle,
+          description: selectedPage.description,
+          buttonText: selectedPage.buttonText,
+          buttonColor: selectedPage.buttonColor,
+          textColor: selectedPage.textColor
+        })} 
+        onClose={handleBack} 
+      />
+    )
   }
 
   if (view === "details" && selectedPage) {

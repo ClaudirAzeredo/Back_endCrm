@@ -104,6 +104,9 @@ export default function Dashboard({ period, onPeriodChange }: DashboardProps) {
         // Derive minimal local lists for compatibility, if needed
         // Use backend stats directly in UI via state replacement
         if (mounted) {
+          if (resp.leads && Array.isArray(resp.leads)) {
+            setLeads(resp.leads)
+          }
           // Patch computed memo sources by injecting backend values
           (window as any).__dashboard_backend__ = resp
         }
@@ -143,9 +146,13 @@ export default function Dashboard({ period, onPeriodChange }: DashboardProps) {
   }, [leads, tasks, funnels, selectedFunnelId])
 
   const stats = useMemo(() => {
-    const backend = (typeof window !== "undefined" && (window as any).__dashboard_backend__) || null
-    if (backend?.stats) return backend.stats
+    // Prefer local calculation if leads are available to support funnel column mapping
     const { leads: filteredLeads, tasks: filteredTasks, selectedFunnel } = filteredData
+    
+    // Fallback to backend stats only if no local processing is possible
+    const backend = (typeof window !== "undefined" && (window as any).__dashboard_backend__) || null
+    if (filteredLeads.length === 0 && backend?.stats) return backend.stats
+
     console.log("[v0] Calculating stats for", filteredLeads.length, "leads")
 
     const now = new Date()
@@ -247,9 +254,11 @@ export default function Dashboard({ period, onPeriodChange }: DashboardProps) {
 
   // Dados para gráficos simplificados baseados no funil selecionado
   const chartData = useMemo(() => {
-    const backend = (typeof window !== "undefined" && (window as any).__dashboard_backend__) || null
-    if (backend?.charts) return backend.charts
     const { leads: filteredLeads, selectedFunnel } = filteredData
+    
+    // Prefer local calculation if leads are available
+    const backend = (typeof window !== "undefined" && (window as any).__dashboard_backend__) || null
+    if (filteredLeads.length === 0 && backend?.charts) return backend.charts
 
     // Leads por status (usando colunas do funil se selecionado)
     const leadsByStatus = filteredLeads.reduce(
@@ -260,7 +269,7 @@ export default function Dashboard({ period, onPeriodChange }: DashboardProps) {
       {} as Record<string, number>,
     )
 
-    const leadStatusData = Object.entries(leadsByStatus).map(([status, count]) => {
+    const leadStatusData = Object.entries(leadsByStatus).map(([status, count]: [string, number]) => {
       let statusName = status
 
       // Se há um funil selecionado, usar os nomes das colunas
@@ -301,7 +310,7 @@ export default function Dashboard({ period, onPeriodChange }: DashboardProps) {
       {} as Record<string, number>,
     )
 
-    const leadSourceData = Object.entries(leadsBySource).map(([source, count]) => ({
+    const leadSourceData = Object.entries(leadsBySource).map(([source, count]: [string, number]) => ({
       name:
         source === "website"
           ? "Website"
@@ -326,7 +335,7 @@ export default function Dashboard({ period, onPeriodChange }: DashboardProps) {
       { range: "100k+", min: 100000, max: Number.POSITIVE_INFINITY },
     ]
 
-    const leadValueData = leadValueRanges.map(({ range, min, max }) => {
+    const leadValueData = leadValueRanges.map(({ range, min, max }: { range: string; min: number; max: number }) => {
       const count = filteredLeads.filter((lead) => lead.estimatedValue >= min && lead.estimatedValue < max).length
       return {
         name: range,
@@ -379,7 +388,7 @@ export default function Dashboard({ period, onPeriodChange }: DashboardProps) {
               </SelectContent>
             </Select>
             <Button
-              variant={viewMode === "standard" ? "default" : "outline"}
+              variant={(viewMode as string) === "standard" ? "default" : "outline"}
               size="sm"
               onClick={() => setViewMode("standard")}
             >
@@ -387,7 +396,7 @@ export default function Dashboard({ period, onPeriodChange }: DashboardProps) {
               Padrão
             </Button>
             <Button
-              variant={viewMode === "pizza" ? "default" : "outline"}
+              variant={(viewMode as string) === "pizza" ? "default" : "outline"}
               size="sm"
               onClick={() => setViewMode("pizza")}
             >
@@ -449,14 +458,14 @@ export default function Dashboard({ period, onPeriodChange }: DashboardProps) {
             </SelectContent>
           </Select>
           <Button
-            variant={viewMode === "standard" ? "default" : "outline"}
+            variant={(viewMode as string) === "standard" ? "default" : "outline"}
             size="sm"
             onClick={() => setViewMode("standard")}
           >
             <BarChart3 className="h-4 w-4 mr-2" />
             Padrão
           </Button>
-          <Button variant={viewMode === "pizza" ? "default" : "outline"} size="sm" onClick={() => setViewMode("pizza")}>
+          <Button variant={(viewMode as string) === "pizza" ? "default" : "outline"} size="sm" onClick={() => setViewMode("pizza")}>
             <PieChartIcon className="h-4 w-4 mr-2" />
             Pizza
           </Button>
@@ -566,7 +575,7 @@ export default function Dashboard({ period, onPeriodChange }: DashboardProps) {
               </CardHeader>
               <CardContent>
                 <div className="space-y-4">
-                  {chartData.leadStatus.map((item, index) => (
+                  {chartData.leadStatus.map((item: { name: string; value: number; percentage: string }, index: number) => (
                     <div key={item.name} className="flex items-center justify-between">
                       <div className="flex items-center space-x-2">
                         <div
@@ -591,7 +600,7 @@ export default function Dashboard({ period, onPeriodChange }: DashboardProps) {
               </CardHeader>
               <CardContent>
                 <div className="space-y-4">
-                  {chartData.leadSource.map((item, index) => (
+                  {chartData.leadSource.map((item: { name: string; value: number; percentage: string }, index: number) => (
                     <div key={item.name} className="space-y-2">
                       <div className="flex items-center justify-between">
                         <span className="text-sm font-medium">{item.name}</span>
@@ -712,7 +721,7 @@ export default function Dashboard({ period, onPeriodChange }: DashboardProps) {
               </CardHeader>
               <CardContent>
                 <div className="space-y-4">
-                  {chartData.leadSource.map((item, index) => (
+                  {chartData.leadSource.map((item: { name: string; value: number; percentage: string }, index: number) => (
                     <div key={item.name} className="space-y-2">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center space-x-2">
@@ -739,7 +748,7 @@ export default function Dashboard({ period, onPeriodChange }: DashboardProps) {
               </CardHeader>
               <CardContent>
                 <div className="space-y-4">
-                  {chartData.leadValue.map((item, index) => (
+                  {chartData.leadValue.map((item: { name: string; value: number; percentage: string }, index: number) => (
                     <div key={item.name} className="space-y-2">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center space-x-2">

@@ -4,7 +4,6 @@ import crm.dto.TokenPair;
 import crm.entity.User;
 import crm.repository.UserRepository;
 import crm.service.AuthService;
-import crm.service.UserService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -24,7 +23,6 @@ public class AuthController {
 
     private final AuthService authService;
     private final UserRepository userRepository;
-    private final UserService userService;
 
     // POST /auth/register
     @PostMapping("/register")

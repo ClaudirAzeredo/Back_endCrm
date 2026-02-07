@@ -270,8 +270,10 @@ public class WhatsAppWebhookController {
     @PostMapping(value = "/webhook", consumes = {"text/plain", "application/octet-stream"})
     public ResponseEntity<?> logAnyWebhook(@RequestHeader Map<String, String> headers,
                                            HttpServletRequest request) throws IOException {
-        String raw = new BufferedReader(new InputStreamReader(request.getInputStream()))
-                .lines().collect(Collectors.joining("\n"));
+        String raw;
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(request.getInputStream()))) {
+            raw = reader.lines().collect(Collectors.joining("\n"));
+        }
         log.info("[WEBHOOK RAW] headers: {}", headers != null ? headers.keySet() : null);
         String preview = raw != null ? raw : "null";
         log.info("[WEBHOOK RAW] raw preview: {}", preview.substring(0, Math.min(1000, preview.length())));
@@ -279,7 +281,7 @@ public class WhatsAppWebhookController {
         Map<String, Object> parsed = null;
         try {
             com.fasterxml.jackson.databind.ObjectMapper om = new com.fasterxml.jackson.databind.ObjectMapper();
-            parsed = om.readValue(raw, Map.class);
+            parsed = om.readValue(raw, new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>(){});
         } catch (Exception ex) {
             log.warn("[WEBHOOK RAW] failed to parse JSON: {}", ex.toString());
         }

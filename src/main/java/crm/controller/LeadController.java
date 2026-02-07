@@ -96,6 +96,7 @@ public class LeadController {
             m.put("expectedCloseDate", l.getExpectedCloseDate() == null ? null : l.getExpectedCloseDate().toString());
             m.put("notes", l.getNotes());
             m.put("tags", l.getTags());
+            m.put("currentActionId", l.getCurrentActionId());
             m.put("createdAt", l.getCreatedAt() == null ? null : l.getCreatedAt().toString());
             m.put("assignedTo", assignedTo);
             m.put("contacts", contacts);
@@ -106,7 +107,70 @@ public class LeadController {
         return ResponseEntity.ok(body);
     }
 
+    @PostMapping("/public")
+    public ResponseEntity<?> createPublicLead(@RequestBody CreateLeadRequest req) {
+        List<String> errors = new ArrayList<>();
+
+        if (req.title == null || req.title.isBlank()) {
+            req.title = req.client; // Fallback
+        }
+        if (req.client == null || req.client.isBlank()) {
+            errors.add("Nome do cliente é obrigatório");
+        }
+        if (req.funnelId == null || req.funnelId.isBlank()) {
+            errors.add("funnelId é obrigatório");
+        }
+        // companyId is required for public leads as there is no session
+        if (req.companyId == null || req.companyId.isBlank()) {
+            errors.add("companyId é obrigatório");
+        }
+
+        if (!errors.isEmpty()) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of("success", false, "errors", errors));
+        }
+
+        Lead lead = Lead.builder()
+                .title(req.title)
+                .client(req.client)
+                .clientEmail(req.clientEmail)
+                .clientPhone(req.clientPhone)
+                .clientAddress(req.clientAddress)
+                .clientType(req.clientType != null ? req.clientType : "fisica")
+                .clientCPF(req.clientCPF)
+                .clientCNPJ(req.clientCNPJ)
+                .source(req.source != null ? req.source : "landing_page")
+                .status(req.status != null ? req.status : "novo") // Default status if not provided
+                .funnelId(req.funnelId)
+                .companyId(req.companyId) // Set company explicitely
+                .priority("medium")
+                .notes(req.notes)
+                .tags(req.tags)
+                .createdAt(Instant.now())
+                .build();
+
+        if (req.contacts != null) {
+            for (ContactDto c : req.contacts) {
+                LeadContact contact = LeadContact.builder()
+                        .lead(lead)
+                        .name(c.name)
+                        .email(c.email)
+                        .phone(c.phone)
+                        .isPrincipal(c.isPrincipal != null ? c.isPrincipal : false)
+                        .build();
+                lead.getContacts().add(contact);
+            }
+        }
+
+        Lead saved = leadService.save(lead);
+
+        return ResponseEntity.status(HttpStatus.CREATED).body(Map.of(
+                "success", true,
+                "id", saved.getId()
+        ));
+    }
+
     @PostMapping
+
     public ResponseEntity<?> createLead(@RequestBody CreateLeadRequest req) {
         // Validations per technical spec
         List<String> errors = new ArrayList<>();
@@ -329,6 +393,11 @@ public class LeadController {
             lead.setTags(req.tags);
         }
 
+        if (req.currentActionId != null) {
+            // Allows clearing the action if an empty string is sent, or updating it
+            lead.setCurrentActionId(req.currentActionId.isBlank() ? null : req.currentActionId);
+        }
+
         if (!errors.isEmpty()) {
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of("success", false, "errors", errors));
         }
@@ -345,6 +414,7 @@ public class LeadController {
         body.put("expectedCloseDate", saved.getExpectedCloseDate() == null ? null : saved.getExpectedCloseDate().toString());
         body.put("notes", saved.getNotes());
         body.put("tags", saved.getTags());
+        body.put("currentActionId", saved.getCurrentActionId());
         return ResponseEntity.ok(body);
     }
 
@@ -457,6 +527,7 @@ public class LeadController {
         public String expectedCloseDate; // YYYY-MM-DD
         public String notes;
         public List<String> tags;
+        public String companyId; // Added for public endpoint
         public List<ContactDto> contacts;
     }
 
@@ -504,5 +575,6 @@ public class LeadController {
         public String expectedCloseDate; // YYYY-MM-DD
         public String notes;
         public List<String> tags;
+        public String currentActionId;
     }
 }

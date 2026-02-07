@@ -23,23 +23,45 @@ export function useApiAuth(): UseAuthReturn {
 
   // Initialize auth from localStorage and hydrate user via /auth/me
   useEffect(() => {
-    const { user: storedUser, token } = authApi.initializeAuth()
-    setUser(storedUser)
-    if (token) {
-      setIsLoading(true)
-      authApi
-        .me()
-        .then((me) => {
-          setUser(me)
-          console.log("[v0] Auth initialized with token; user:", me)
-        })
-        .catch((err) => {
-          console.warn("[v0] Auth init /auth/me failed; keeping stored user", err)
-        })
-        .finally(() => setIsLoading(false))
-    } else {
-      setIsLoading(false)
+    // Safety timeout to prevent infinite loading
+    const safetyTimer = setTimeout(() => {
+      setIsLoading((loading) => {
+        if (loading) {
+          console.warn("[v0] Auth check safety timeout triggered - forcing loading=false")
+          return false
+        }
+        return loading
+      })
+    }, 3000)
+
+    const init = async () => {
+      const { user: storedUser, token } = authApi.initializeAuth()
+      setUser(storedUser)
+      
+      if (token) {
+        setIsLoading(true)
+        try {
+           const me = await authApi.me()
+           setUser(me as User)
+           console.log("[v0] Auth initialized with token; user:", me)
+        } catch (err) {
+           console.warn("[v0] Auth init /auth/me failed; keeping stored user", err)
+           // If 401, apiClient already cleared token, so we should clear user too
+           // But let's trust apiClient's handling or check token again
+           if (!authApi.initializeAuth().token) {
+             setUser(null)
+           }
+        } finally {
+          setIsLoading(false)
+        }
+      } else {
+        setIsLoading(false)
+      }
     }
+
+    init()
+
+    return () => clearTimeout(safetyTimer)
   }, [])
 
   const login = useCallback(async (data: LoginRequest) => {

@@ -59,11 +59,68 @@ export default function Home() {
     setAuthView("login")
   }
 
-  if (isLoading) {
+  const [showForceLogout, setShowForceLogout] = useState(false)
+  const [forceShowContent, setForceShowContent] = useState(false)
+
+  const [mounted, setMounted] = useState(false)
+
+  useEffect(() => {
+    setMounted(true)
+  }, [])
+
+  useEffect(() => {
+    let timer: NodeJS.Timeout
+    if (isLoading) {
+      timer = setTimeout(() => {
+        setShowForceLogout(true)
+        // Auto-resolve loading state after 2s to prevent getting stuck
+        setForceShowContent(true)
+      }, 2000)
+    }
+    return () => clearTimeout(timer)
+  }, [isLoading])
+
+  if (isLoading && !forceShowContent) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-center">
-          <p className="text-gray-600">Carregando...</p>
+      <div className="min-h-screen flex flex-col items-center justify-center gap-4 bg-gray-50">
+        <div className="text-center space-y-2">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto"></div>
+          <p className="text-gray-600 font-medium">Iniciando aplicação...</p>
+          <p className="text-xs text-gray-400">Verificando credenciais</p>
+        </div>
+        
+        {/* Debug Info */}
+        {mounted && (
+          <div className="text-[10px] text-gray-300 font-mono absolute bottom-4 left-4 text-left">
+             Status: {isLoading ? "Loading" : "Loaded"}<br/>
+             User: {user ? "Yes" : "No"}<br/>
+             Token: {localStorage.getItem("unicrm_access_token") ? "Yes" : "No"}
+          </div>
+        )}
+
+        <div className="flex flex-col gap-2 mt-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
+           {showForceLogout && (
+             <p className="text-sm text-red-500 text-center">O carregamento está demorando.</p>
+           )}
+           <Button 
+             variant="outline" 
+             className="w-full"
+             onClick={() => setForceShowContent(true)}
+           >
+             Entrar assim mesmo
+           </Button>
+           {showForceLogout && (
+            <Button 
+              variant="destructive" 
+              className="w-full"
+              onClick={() => {
+                localStorage.removeItem("unicrm_access_token")
+                window.location.reload()
+              }}
+            >
+              Reiniciar Aplicação
+            </Button>
+           )}
         </div>
       </div>
     )

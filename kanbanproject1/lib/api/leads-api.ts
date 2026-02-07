@@ -87,6 +87,7 @@ export interface CreateLeadRequest {
   expectedCloseDate?: string
   notes?: string
   tags?: string[]
+  currentActionId?: string
   // Contacts are REQUIRED by backend; include shape here
   contacts?: Array<{
     id?: string

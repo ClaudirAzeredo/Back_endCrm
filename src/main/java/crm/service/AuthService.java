@@ -32,11 +32,19 @@ public class AuthService {
     private final UserRepository userRepository;
     private final CompanyRepository companyRepository;
     private final RefreshTokenRepository refreshTokenRepository;
-    private final AuthenticationManager authenticationManager;
+    
+    @org.springframework.beans.factory.annotation.Autowired
+    @org.springframework.context.annotation.Lazy
+    private AuthenticationManager authenticationManager;
+
     private final JwtService jwtService; // Você deve ter um serviço que gera o JWT de acesso
 
     private final PasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
+
+    @org.springframework.beans.factory.annotation.Autowired
+    @org.springframework.context.annotation.Lazy
+    private AuthService self;
 
     // ==========================
     // Fluxos públicos (register/login/logout)
@@ -121,6 +129,7 @@ public class AuthService {
     // Não abrir transação aqui; a emissão de token permanente irá
     // gerenciar sua própria transação para evitar rollback-only.
     public Map<String, Object> login(LoginRequest req) {
+        System.out.println("Login attempt for: " + req.email());
         Authentication auth = authenticate(req.email(), req.password());
         User user = userRepository.findByEmail(req.email())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Credenciais inválidas"));
@@ -129,8 +138,10 @@ public class AuthService {
         // Emissão do token permanente não deve causar 500 — se falhar, seguimos apenas com o accessToken
         TokenPair pair = null;
         try {
-            pair = issuePersistentToken(user); // se já existir, secret será null (não reexpor)
+            pair = self.issuePersistentToken(user); // se já existir, secret será null (não reexpor)
         } catch (Exception e) {
+            System.err.println("Error issuing persistent token for user " + user.getId() + ": " + e.getMessage());
+            e.printStackTrace();
             // Ambiente pode ter tabela antiga de refresh_tokens; não quebrar login em dev
         }
 
@@ -197,7 +208,8 @@ public class AuthService {
 
         // Se havia registros (todos revogados ou duplicados), garante unicidade antes de criar
         if (!all.isEmpty()) {
-            refreshTokenRepository.deleteByUserId(userId);
+            refreshTokenRepository.deleteAll(all);
+            refreshTokenRepository.flush();
         }
 
         String secretPlain = generateSecret();
@@ -281,6 +293,8 @@ public class AuthService {
                     new UsernamePasswordAuthenticationToken(email, password)
             );
         } catch (Exception e) {
+            System.err.println("Authentication failed for " + email + ": " + e.getMessage());
+            e.printStackTrace();
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Credenciais inválidas");
         }
     }
